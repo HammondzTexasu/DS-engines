@@ -164,6 +164,76 @@ export function resolveParam(config, step, steps) {
   return interpolateValue(p0.value, p1.value, t, bezier);
 }
 
+/** UI slider/input ceiling for chroma (same as Material Web HCT picker). */
+export const CHROMA_UI_MAX = 150;
+
+/**
+ * Maximum chroma representable in sRGB for the given HCT hue and tone.
+ * @param {number} hue
+ * @param {number} tone
+ * @returns {number}
+ */
+export function maxChromaForHueTone(hue, tone) {
+  return Math.round(Hct.from(hue, 999, tone).chroma);
+}
+
+/**
+ * Clamp requested chroma to what HCT can actually deliver for hue + tone.
+ * Does not raise chroma above the requested value.
+ * @param {number} chroma
+ * @param {number} hue
+ * @param {number} tone
+ * @returns {number}
+ */
+export function clampChroma(chroma, hue, tone) {
+  const requested = Math.max(0, Math.round(Number(chroma)) || 0);
+  return Math.min(requested, maxChromaForHueTone(hue, tone));
+}
+
+/**
+ * Highest max-chroma across palette steps (for fixed chroma UI ceiling).
+ * @param {ParamConfig} hueParam
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @returns {number}
+ */
+export function peakChromaForSteps(hueParam, keyResult, steps) {
+  let peak = 0;
+  for (const step of steps) {
+    const hue = resolveParam(hueParam, step, steps);
+    const tone = keyResult.steps[step].tone;
+    peak = Math.max(peak, maxChromaForHueTone(hue, tone));
+  }
+  return peak;
+}
+
+/**
+ * Clamp stored interpolate chroma point values to HCT limits.
+ * Fixed chroma is left as a free "requested" value (UI may show max marker).
+ * Mutates chromaParam.
+ * @param {ParamConfig} chromaParam
+ * @param {ParamConfig} hueParam
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @returns {boolean} true if any value changed
+ */
+export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) {
+  if (chromaParam.mode === 'fixed') return false;
+
+  let changed = false;
+  for (const point of chromaParam.points) {
+    const hue = resolveParam(hueParam, point.step, steps);
+    const tone = keyResult.steps[point.step]?.tone;
+    if (tone === undefined) continue;
+    const next = clampChroma(point.value, hue, tone);
+    if (next !== point.value) {
+      point.value = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * @param {number} hue
  * @param {number} chroma
@@ -255,7 +325,8 @@ export function generateCustomPaletteForMode(palette, mode, keyResult, steps) {
   for (const step of steps) {
     const tone = keyResult.steps[step].tone;
     const hue = resolveParam(cfg.hue, step, steps);
-    const chroma = resolveParam(cfg.chroma, step, steps);
+    const requested = resolveParam(cfg.chroma, step, steps);
+    const chroma = clampChroma(requested, hue, tone);
     stepColors[step] = { tone, hue, chroma, hex: hctToHex(hue, chroma, tone) };
   }
 

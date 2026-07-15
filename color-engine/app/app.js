@@ -7,6 +7,11 @@ import {
   sanitizePaletteName,
   formatBezierCss,
   parseBezierCss,
+  resolveParam,
+  clampChroma,
+  peakChromaForSteps,
+  clampChromaParamValues,
+  CHROMA_UI_MAX,
 } from '../src/engine.js';
 import {
   createDefaultState,
@@ -587,10 +592,57 @@ function render() {
   ensureDarkModeToggle();
 }
 
+/**
+ * Clamp interpolate chroma points and sync max markers / point inputs.
+ * @param {ReturnType<typeof generateKeyPalettes>} keyResults
+ * @param {number[]} steps
+ */
+function clampAllCustomChroma(keyResults, steps) {
+  for (const palette of state.customPalettes) {
+    for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+      clampChromaParamValues(palette[mode].chroma, palette[mode].hue, keyResults[mode], steps);
+      syncChromaControls(palette, mode, steps);
+    }
+  }
+}
+
+/**
+ * Sync chroma max marker (fixed) and clamped point inputs (interpolate).
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} steps
+ */
+function syncChromaControls(palette, mode, steps) {
+  const chroma = palette[mode].chroma;
+  if (chroma.mode === 'fixed') {
+    const marker = app.querySelector(
+      `[data-chroma-max-marker="${palette.id}:${mode}:fixed"]`,
+    );
+    if (marker instanceof HTMLElement) {
+      const peak = chromaPeakForPalette(palette, mode, steps);
+      const pct = Math.max(0, Math.min(100, (peak / CHROMA_UI_MAX) * 100));
+      marker.style.left = `${pct}%`;
+      marker.title = `Max chroma: ${peak}`;
+    }
+    return;
+  }
+
+  chroma.points.forEach((point, i) => {
+    const input = app.querySelector(
+      `input[data-chroma-control="${palette.id}:${mode}:point:${i}"]`,
+    );
+    if (input instanceof HTMLInputElement) {
+      input.value = String(point.value);
+    }
+  });
+}
+
 function refreshPreviews() {
   const steps = getSteps(state.stepCount);
   const endStep = getEndStep(state.stepCount);
   const keyResults = generateKeyPalettes(state.keyPalette, steps);
+
+  clampAllCustomChroma(keyResults, steps);
 
   patchPreviewRow('key-lm', keyResults.lm, steps, endStep, 'tone');
   patchPreviewRow('key-dm', keyResults.dm, steps, endStep, 'tone');
@@ -1029,6 +1081,7 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
     segment.appendChild(createModeParamGroup(
       palette,
       mode,
+      keyResult,
       steps,
       endStep,
       safeName,
@@ -1051,7 +1104,20 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
   return wrapPaletteFieldset(fs, titleInput, removeBtn);
 }
 
-function createModeParamGroup(palette, mode, steps, endStep, safeName, suffix, onUpdate, expandedParamGroups = new Set()) {
+/**
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {ReturnType<typeof generateKeyPalettes>['lm']} keyResult
+ * @param {number[]} steps
+ * @param {number} endStep
+ * @param {string} safeName
+ * @param {string} suffix
+ * @param {() => void} onUpdate
+ * @param {Set<string>} [expandedParamGroups]
+ */
+function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName, suffix, onUpdate, expandedParamGroups = new Set()) {
+  clampChromaParamValues(palette[mode].chroma, palette[mode].hue, keyResult, steps);
+
   const group = document.createElement('div');
   const groupKey = `${palette.id}:${mode}`;
   const isExpanded = expandedParamGroups.has(groupKey);
@@ -1081,23 +1147,56 @@ function createModeParamGroup(palette, mode, steps, endStep, safeName, suffix, o
   const body = document.createElement('div');
   body.className = 'param-settings-body';
 
-  for (const param of /** @type {const} */ (['hue', 'chroma'])) {
-    const max = param === 'hue' ? 360 : 150;
-    const paramLabel = `${param.charAt(0).toUpperCase() + param.slice(1)} (${mode.toUpperCase()})`;
+  const chromaCtx = {
+    palette,
+    mode,
+    keyResult,
+    steps,
+  };
+
+  for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
+    const max = paramName === 'hue' ? 360 : CHROMA_UI_MAX;
+    const paramLabel = `${paramName.charAt(0).toUpperCase() + paramName.slice(1)} (${mode.toUpperCase()})`;
     body.appendChild(createParamSection(
-      palette[mode][param],
+      palette[mode][paramName],
       steps,
       endStep,
       paramLabel,
-      `${safeName}${suffix}-${param}-interpolator`,
+      `${safeName}${suffix}-${paramName}-interpolator`,
       max,
       onUpdate,
-      `${suffix}-${param}-interpolator`,
+      `${suffix}-${paramName}-interpolator`,
+      paramName === 'chroma' ? chromaCtx : null,
     ));
   }
 
   group.appendChild(body);
   return group;
+}
+
+/**
+ * Live HCT chroma ceiling for a palette step (uses current key-palette tones).
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} steps
+ * @param {number} step
+ */
+function chromaLimitAtStep(palette, mode, steps, step) {
+  const keyResult = generateKeyPalettes(state.keyPalette, steps)[mode];
+  const hue = resolveParam(palette[mode].hue, step, steps);
+  const tone = keyResult.steps[step].tone;
+  return clampChroma(CHROMA_UI_MAX, hue, tone);
+}
+
+/**
+ * Live peak chroma for fixed chroma UI.
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} steps
+ */
+function chromaPeakForPalette(palette, mode, steps) {
+  const keyResult = generateKeyPalettes(state.keyPalette, steps)[mode];
+  return peakChromaForSteps(palette[mode].hue, keyResult, steps);
 }
 
 /**
@@ -1109,8 +1208,9 @@ function createModeParamGroup(palette, mode, steps, endStep, safeName, suffix, o
  * @param {number} max
  * @param {() => void} onUpdate
  * @param {string} nameSuffix
+ * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[] } | null} [chromaCtx]
  */
-function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix) {
+function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null) {
   const section = document.createElement('div');
   section.className = 'param-section';
 
@@ -1128,6 +1228,9 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     if (toggle.checked) {
       const val = param.mode === 'fixed' ? param.value : 0;
       Object.assign(param, createInterpolateParam(10, val, endStep, val));
+      if (chromaCtx) {
+        clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, chromaCtx.keyResult, chromaCtx.steps);
+      }
       const group = section.closest('.param-settings-group');
       if (group) {
         group.classList.remove('is-collapsed');
@@ -1138,6 +1241,9 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
         ? param.points[0]?.value ?? 0
         : param.value;
       Object.assign(param, createFixedParam(val));
+      if (chromaCtx) {
+        clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, chromaCtx.keyResult, chromaCtx.steps);
+      }
     }
     onUpdate();
   });
@@ -1146,18 +1252,38 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
   section.appendChild(toggleRow);
 
   if (param.mode === 'fixed') {
-    section.appendChild(createSliderControl('Value', param.value, 0, max, (v) => {
-      param.value = v;
-      scheduleRefreshPreviews();
-    }));
+    if (chromaCtx) {
+      section.appendChild(createChromaFixedSlider(
+        param,
+        chromaCtx.palette,
+        chromaCtx.mode,
+        chromaCtx.steps,
+        max,
+      ));
+    } else {
+      section.appendChild(createSliderControl('Value', param.value, 0, max, (v) => {
+        param.value = v;
+        scheduleRefreshPreviews();
+      }));
+    }
   } else {
-    section.appendChild(createInterpControls(param, steps, endStep, interpolatorPrefix, max, onUpdate, nameSuffix));
+    section.appendChild(createInterpControls(param, steps, endStep, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx));
   }
 
   return section;
 }
 
-function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix) {
+/**
+ * @param {import('../src/engine.js').ParamConfig} param
+ * @param {number[]} steps
+ * @param {number} endStep
+ * @param {string} prefix
+ * @param {number} max
+ * @param {() => void} onUpdate
+ * @param {string} nameSuffix
+ * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[] } | null} [chromaCtx]
+ */
+function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix, chromaCtx = null) {
   const container = document.createElement('div');
 
   const pointsWrap = document.createElement('div');
@@ -1177,14 +1303,36 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
 
     fields.appendChild(createStepSelect('Step', point.step, steps, isEndpoint, (step) => {
       point.step = step;
+      if (chromaCtx) {
+        const limit = chromaLimitAtStep(
+          chromaCtx.palette,
+          chromaCtx.mode,
+          chromaCtx.steps,
+          point.step,
+        );
+        point.value = Math.min(point.value, limit);
+      }
       param.points.sort((a, b) => a.step - b.step);
       onUpdate();
     }));
 
+    const valueTransform = chromaCtx
+      ? (v) => {
+        const limit = chromaLimitAtStep(
+          chromaCtx.palette,
+          chromaCtx.mode,
+          chromaCtx.steps,
+          point.step,
+        );
+        return Math.min(Math.max(0, Math.round(v)), limit);
+      }
+      : null;
+    const controlKey = chromaCtx ? `${chromaCtx.palette.id}:${chromaCtx.mode}:point:${i}` : null;
+
     fields.appendChild(createNumberControl('Value', point.value, 0, max, (v) => {
       point.value = v;
       scheduleRefreshPreviews();
-    }));
+    }, { transform: valueTransform, controlKey }));
 
     row.appendChild(fields);
 
@@ -1261,7 +1409,13 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
 
     const prev = param.points[idx - 1];
     const next = param.points[idx];
-    const newVal = Math.round((prev.value + next.value) / 2);
+    let newVal = Math.round((prev.value + next.value) / 2);
+    if (chromaCtx) {
+      newVal = Math.min(
+        newVal,
+        chromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, chromaCtx.steps, newStep),
+      );
+    }
 
     param.points.splice(idx, 0, { step: newStep, value: newVal });
     param.interpolators.splice(idx - 1, 0, [...DEFAULT_BEZIER]);
@@ -1408,19 +1562,43 @@ function createToneControl(label, value, onChange) {
   return createSliderControl(label, value, 0, 100, onChange);
 }
 
-function createSliderControl(label, value, min, max, onChange) {
+/**
+ * Fixed chroma slider: free 0–UI max, informational peak marker.
+ * @param {import('../src/engine.js').ParamConfig} param
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} steps
+ * @param {number} uiMax
+ */
+function createChromaFixedSlider(param, palette, mode, steps, uiMax) {
   const group = document.createElement('div');
-  group.className = 'control-group';
+  group.className = 'control-group chroma-fixed-control';
+
+  const controlKey = `${palette.id}:${mode}:fixed`;
+  const peak = chromaPeakForPalette(palette, mode, steps);
 
   const lbl = document.createElement('label');
-  lbl.textContent = `${label}: ${value}`;
+  lbl.textContent = `Value: ${param.value}`;
   group.appendChild(lbl);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'chroma-slider-wrap';
+
+  const marker = document.createElement('div');
+  marker.className = 'chroma-slider-max';
+  marker.dataset.chromaMaxMarker = controlKey;
+  marker.setAttribute('aria-hidden', 'true');
+  marker.title = `Max chroma: ${peak}`;
+  marker.style.left = `${Math.max(0, Math.min(100, (peak / uiMax) * 100))}%`;
+  wrap.appendChild(marker);
 
   const input = document.createElement('input');
   input.type = 'range';
-  input.min = String(min);
-  input.max = String(max);
-  input.value = String(value);
+  input.min = '0';
+  input.max = String(uiMax);
+  input.value = String(param.value);
+  input.dataset.chromaControl = controlKey;
+  input.setAttribute('aria-label', 'Chroma value');
   input.addEventListener('pointerdown', (e) => {
     input.setPointerCapture(e.pointerId);
   });
@@ -1436,6 +1614,58 @@ function createSliderControl(label, value, min, max, onChange) {
   });
   input.addEventListener('input', () => {
     const v = Number(input.value);
+    lbl.textContent = `Value: ${v}`;
+    param.value = v;
+    scheduleRefreshPreviews();
+  });
+  wrap.appendChild(input);
+  group.appendChild(wrap);
+  return group;
+}
+
+/**
+ * @param {string} label
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ * @param {(v: number) => void} onChange
+ * @param {{ transform?: (v: number) => number, controlKey?: string | null }} [options]
+ */
+function createSliderControl(label, value, min, max, onChange, options = {}) {
+  const group = document.createElement('div');
+  group.className = 'control-group';
+
+  const transform = options.transform ?? ((v) => v);
+
+  const lbl = document.createElement('label');
+  lbl.textContent = `${label}: ${value}`;
+  group.appendChild(lbl);
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.value = String(value);
+  if (options.controlKey) {
+    input.dataset.chromaControl = options.controlKey;
+  }
+  input.addEventListener('pointerdown', (e) => {
+    input.setPointerCapture(e.pointerId);
+  });
+  input.addEventListener('pointerup', (e) => {
+    if (input.hasPointerCapture(e.pointerId)) {
+      input.releasePointerCapture(e.pointerId);
+    }
+  });
+  input.addEventListener('pointercancel', (e) => {
+    if (input.hasPointerCapture(e.pointerId)) {
+      input.releasePointerCapture(e.pointerId);
+    }
+  });
+  input.addEventListener('input', () => {
+    let v = transform(Number(input.value));
+    if (!Number.isFinite(v)) v = min;
+    input.value = String(v);
     lbl.textContent = `${label}: ${v}`;
     onChange(v);
   });
@@ -1443,9 +1673,19 @@ function createSliderControl(label, value, min, max, onChange) {
   return group;
 }
 
-function createNumberControl(label, value, min, max, onChange) {
+/**
+ * @param {string} label
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ * @param {(v: number) => void} onChange
+ * @param {{ transform?: (v: number) => number, controlKey?: string | null }} [options]
+ */
+function createNumberControl(label, value, min, max, onChange, options = {}) {
   const group = document.createElement('div');
   group.className = 'control-group';
+
+  const transform = options.transform ?? ((v) => v);
 
   const lbl = document.createElement('label');
   lbl.textContent = label;
@@ -1456,8 +1696,16 @@ function createNumberControl(label, value, min, max, onChange) {
   input.min = String(min);
   input.max = String(max);
   input.value = String(value);
+  if (options.controlKey) {
+    input.dataset.chromaControl = options.controlKey;
+  }
   input.addEventListener('change', () => {
-    onChange(Number(input.value));
+    let v = transform(Number(input.value));
+    if (!Number.isFinite(v)) v = min;
+    v = Math.max(min, Math.min(max, v));
+    v = transform(v);
+    input.value = String(v);
+    onChange(v);
   });
   group.appendChild(input);
   return group;
