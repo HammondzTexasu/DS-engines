@@ -1078,7 +1078,7 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
   row.appendChild(createSliderControl('State2 scale (pressed)', states.state2Scale, 1, 4, (v) => {
     states.state2Scale = v;
     scheduleRefreshPreviews();
-  }));
+  }, { step: 0.1 }));
 
   body.appendChild(row);
 
@@ -2297,6 +2297,7 @@ function createSliderTrack(wrap) {
  * @param {(v: number) => void} onChange
  * @param {{
  *   transform?: (v: number) => number,
+ *   step?: number,
  *   controlKey?: string | null,
  *   hardClampToMarker?: boolean,
  *   getMarkerMax?: () => number,
@@ -2310,11 +2311,23 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   const transform = options.transform ?? ((v) => v);
   const getMarkerMax = options.getMarkerMax;
   const hardClamp = Boolean(options.hardClampToMarker && getMarkerMax);
+  const step = options.step ?? 1;
+  const decimals = (() => {
+    const s = String(step);
+    const i = s.indexOf('.');
+    return i === -1 ? 0 : s.length - i - 1;
+  })();
+
+  const snap = (n) => {
+    if (decimals <= 0) return Math.round(n);
+    const f = 10 ** decimals;
+    return Math.round(n * f) / f;
+  };
 
   const applyValue = (raw) => {
     let v = Number(raw);
     if (!Number.isFinite(v)) v = min;
-    v = Math.round(v);
+    v = snap(v);
     v = Math.max(min, Math.min(max, v));
     if (hardClamp && getMarkerMax) {
       v = Math.min(v, getMarkerMax());
@@ -2334,9 +2347,13 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     value,
     min,
     max,
+    step,
     ariaLabel: `${label} value`,
     controlKey: options.controlKey ?? null,
   });
+  if (decimals > 0) {
+    numberInput.inputMode = 'decimal';
+  }
 
   const wrap = document.createElement('div');
   wrap.className = 'chroma-slider-wrap';
@@ -2350,6 +2367,7 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   range.type = 'range';
   range.min = String(min);
   range.max = String(max);
+  range.step = String(step);
   range.value = String(value);
   range.setAttribute('aria-label', label);
   if (options.controlKey) {
