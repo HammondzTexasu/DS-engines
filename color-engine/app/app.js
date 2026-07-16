@@ -135,6 +135,7 @@ function resolveNeutralFg(surfaceHex) {
  */
 function getUiThemeTokens(surfaceHex) {
   const fg = resolveNeutralFg(surfaceHex);
+  const isLight = getRelativeLuminance(surfaceHex) > 0.5;
   const accent = resolveSemanticColor(UI_ACCENT_BASE, surfaceHex);
   const danger = resolveSemanticColor(UI_DANGER_BASE, surfaceHex);
   const fgMuted = mixHex(fg, surfaceHex, 0.42);
@@ -142,7 +143,7 @@ function getUiThemeTokens(surfaceHex) {
   const disabledFg = mixHex(fg, surfaceHex, 0.5);
 
   return {
-    isLight: getRelativeLuminance(surfaceHex) > 0.5,
+    isLight,
     '--ui-fg': fg,
     '--ui-fg-muted': fgMuted,
     '--ui-border': border,
@@ -151,6 +152,8 @@ function getUiThemeTokens(surfaceHex) {
     '--ui-danger': danger,
     '--ui-hover-bg': mixHex(fg, surfaceHex, 0.88),
     '--ui-raised-bg': mixHex(fg, surfaceHex, 0.92),
+    '--ui-control-bg': mixHex(fg, surfaceHex, isLight ? 0.9 : 0.84),
+    '--ui-control-border-hover': mixHex(fg, surfaceHex, 0.52),
     '--ui-input-bg-invalid': mixHex(danger, surfaceHex, 0.88),
     '--ui-select-arrow': encodeSelectArrow(fgMuted),
     '--ui-select-arrow-disabled': encodeSelectArrow(disabledFg),
@@ -192,11 +195,11 @@ let darkModeToggleEl = null;
 function createDarkModeToggle() {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'dark-mode-toggle';
+  btn.className = 'ui-btn dark-mode-toggle';
   btn.setAttribute('aria-label', 'Dark mode');
   btn.setAttribute('aria-pressed', String(pageDarkMode));
   btn.classList.toggle('is-active', pageDarkMode);
-  btn.innerHTML = `<svg class="dark-mode-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+  btn.innerHTML = `<svg class="dark-mode-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
   btn.addEventListener('click', () => {
     pageDarkMode = !pageDarkMode;
     syncDarkModeToggle();
@@ -359,7 +362,7 @@ function createCollapsePanel(title, panelName, body, expanded = false) {
 
   const toggleBtn = document.createElement('button');
   toggleBtn.type = 'button';
-  toggleBtn.className = 'collapse-panel-toggle';
+  toggleBtn.className = 'ui-ghost collapse-panel-toggle';
   toggleBtn.setAttribute('aria-expanded', String(expanded));
 
   const chevron = document.createElement('span');
@@ -493,7 +496,7 @@ function createConfigPanelBody() {
   body.appendChild(importLabel);
 
   const importInput = document.createElement('textarea');
-  importInput.className = 'config-import-input';
+  importInput.className = 'ui-control ui-control--multiline';
   importInput.spellcheck = false;
   importInput.placeholder = 'Paste exported config JSON here…';
   body.appendChild(importInput);
@@ -564,7 +567,7 @@ function render() {
   addHeader.appendChild(addSpacer);
 
   const addBtn = document.createElement('button');
-  addBtn.className = 'add-palette-btn palette-header-action';
+  addBtn.className = 'ui-btn add-palette-btn palette-header-action';
   addBtn.textContent = '+ Add palette';
   addBtn.addEventListener('click', () => {
     state.customPalettes.push(createCustomPalette(`palette-${state.customPalettes.length + 1}`));
@@ -607,7 +610,20 @@ function clampAllCustomChroma(keyResults, steps) {
 }
 
 /**
- * Sync chroma max marker (fixed) and clamped point inputs (interpolate).
+ * @param {string} controlKey
+ * @param {number} maxChroma
+ * @param {number} [scaleMax]
+ */
+function syncChromaMaxMarker(controlKey, maxChroma) {
+  const marker = app.querySelector(`[data-chroma-max-marker="${controlKey}"]`);
+  if (!(marker instanceof HTMLElement)) return;
+  const range = marker.parentElement?.querySelector('input[type="range"]');
+  if (!(range instanceof HTMLInputElement)) return;
+  positionChromaMaxMarker(marker, range, maxChroma);
+}
+
+/**
+ * Sync chroma max markers and clamped point inputs (interpolate).
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
  * @param {number[]} steps
@@ -615,25 +631,28 @@ function clampAllCustomChroma(keyResults, steps) {
 function syncChromaControls(palette, mode, steps) {
   const chroma = palette[mode].chroma;
   if (chroma.mode === 'fixed') {
-    const marker = app.querySelector(
-      `[data-chroma-max-marker="${palette.id}:${mode}:fixed"]`,
+    syncChromaMaxMarker(
+      `${palette.id}:${mode}:fixed`,
+      chromaPeakForPalette(palette, mode, steps),
     );
-    if (marker instanceof HTMLElement) {
-      const peak = chromaPeakForPalette(palette, mode, steps);
-      const pct = Math.max(0, Math.min(100, (peak / CHROMA_UI_MAX) * 100));
-      marker.style.left = `${pct}%`;
-      marker.title = `Max chroma: ${peak}`;
-    }
     return;
   }
 
   chroma.points.forEach((point, i) => {
-    const input = app.querySelector(
-      `input[data-chroma-control="${palette.id}:${mode}:point:${i}"]`,
-    );
-    if (input instanceof HTMLInputElement) {
-      input.value = String(point.value);
-    }
+    const controlKey = `${palette.id}:${mode}:point:${i}`;
+    const limit = chromaLimitAtStep(palette, mode, steps, point.step);
+    syncChromaMaxMarker(controlKey, limit);
+
+    app.querySelectorAll(`input[data-chroma-control="${controlKey}"]`).forEach((el) => {
+      if (!(el instanceof HTMLInputElement)) return;
+      const v = Math.min(point.value, limit);
+      point.value = v;
+      el.value = String(v);
+      if (el.type === 'range') {
+        const wrap = el.parentElement;
+        if (wrap) syncSliderVisuals(wrap, el);
+      }
+    });
   });
 }
 
@@ -810,23 +829,44 @@ function replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat
   existing.replaceWith(row);
 }
 
+/**
+ * Single factory for every compact number field (Steps, slider values, …).
+ * Uses type=text + inputmode so Chrome cannot apply native number-field height.
+ * @param {{ id?: string, value: number, min?: number, max?: number, step?: number, ariaLabel?: string, controlKey?: string | null }} opts
+ */
+function createUiNumberInput(opts) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.className = 'ui-control ui-control--number';
+  if (opts.id) input.id = opts.id;
+  if (opts.min !== undefined) input.min = String(opts.min);
+  if (opts.max !== undefined) input.max = String(opts.max);
+  if (opts.step !== undefined) input.step = String(opts.step);
+  input.value = String(opts.value);
+  if (opts.ariaLabel) input.setAttribute('aria-label', opts.ariaLabel);
+  if (opts.controlKey) input.dataset.chromaControl = opts.controlKey;
+  return input;
+}
+
 function createStepCountControl() {
-  const row = document.createElement('div');
-  row.className = 'toolbar-control steps-control';
+  const group = document.createElement('div');
+  group.className = 'control-group steps-control';
 
   const label = document.createElement('label');
-  label.className = 'toolbar-control-label';
   label.htmlFor = 'step-count-input';
   label.textContent = 'Steps';
-  row.appendChild(label);
+  group.appendChild(label);
 
-  const input = document.createElement('input');
-  input.id = 'step-count-input';
-  input.type = 'number';
-  input.className = 'toolbar-control-input';
-  input.min = '1';
-  input.step = '1';
-  input.value = String(state.stepCount);
+  const input = createUiNumberInput({
+    id: 'step-count-input',
+    value: state.stepCount,
+    min: 1,
+    step: 1,
+    ariaLabel: 'Steps',
+  });
   input.addEventListener('change', () => {
     const value = Math.max(1, Math.round(Number(input.value)) || 1);
     input.value = String(value);
@@ -835,8 +875,8 @@ function createStepCountControl() {
     syncInterpEndSteps();
     render();
   });
-  row.appendChild(input);
-  return row;
+  group.appendChild(input);
+  return group;
 }
 
 function syncInterpEndSteps() {
@@ -1044,6 +1084,7 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
 
   const titleInput = document.createElement('input');
   titleInput.type = 'text';
+  titleInput.className = 'ui-ghost palette-name-input';
   titleInput.value = palette.name;
   titleInput.setAttribute('aria-label', 'Palette name');
   titleInput.addEventListener('input', () => {
@@ -1094,7 +1135,7 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
   }
 
   const removeBtn = document.createElement('button');
-  removeBtn.className = 'danger palette-header-action custom-palette-remove';
+  removeBtn.className = 'ui-btn danger palette-header-action custom-palette-remove';
   removeBtn.textContent = 'Remove';
   removeBtn.addEventListener('click', () => {
     state.customPalettes = state.customPalettes.filter((p) => p.id !== palette.id);
@@ -1125,7 +1166,7 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
 
   const toggleBtn = document.createElement('button');
   toggleBtn.type = 'button';
-  toggleBtn.className = 'param-settings-toggle';
+  toggleBtn.className = 'ui-ghost param-settings-toggle';
   toggleBtn.setAttribute('aria-expanded', String(isExpanded));
 
   const chevron = document.createElement('span');
@@ -1214,10 +1255,13 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
   const section = document.createElement('div');
   section.className = 'param-section';
 
+  const header = document.createElement('div');
+  header.className = 'param-section-header';
+
   const title = document.createElement('h4');
   title.className = 'param-section-title';
   title.textContent = label;
-  section.appendChild(title);
+  header.appendChild(title);
 
   const toggleRow = document.createElement('label');
   toggleRow.className = 'checkbox-row';
@@ -1249,7 +1293,8 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
   });
   toggleRow.appendChild(toggle);
   toggleRow.appendChild(document.createTextNode(' Interpolate'));
-  section.appendChild(toggleRow);
+  header.appendChild(toggleRow);
+  section.appendChild(header);
 
   if (param.mode === 'fixed') {
     if (chromaCtx) {
@@ -1316,23 +1361,21 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
       onUpdate();
     }));
 
-    const valueTransform = chromaCtx
-      ? (v) => {
-        const limit = chromaLimitAtStep(
-          chromaCtx.palette,
-          chromaCtx.mode,
-          chromaCtx.steps,
-          point.step,
-        );
-        return Math.min(Math.max(0, Math.round(v)), limit);
-      }
-      : null;
-    const controlKey = chromaCtx ? `${chromaCtx.palette.id}:${chromaCtx.mode}:point:${i}` : null;
-
-    fields.appendChild(createNumberControl('Value', point.value, 0, max, (v) => {
-      point.value = v;
-      scheduleRefreshPreviews();
-    }, { transform: valueTransform, controlKey }));
+    if (chromaCtx) {
+      fields.appendChild(createChromaPointSlider(
+        point,
+        chromaCtx.palette,
+        chromaCtx.mode,
+        chromaCtx.steps,
+        i,
+        max,
+      ));
+    } else {
+      fields.appendChild(createSliderControl('Value', point.value, 0, max, (v) => {
+        point.value = v;
+        scheduleRefreshPreviews();
+      }));
+    }
 
     row.appendChild(fields);
 
@@ -1552,10 +1595,72 @@ function formatSwatchValue(data, valueFormat) {
       return data.chroma !== undefined ? `C: ${data.chroma}` : '';
     case 'hc':
       if (data.hue === undefined) return '';
-      return `H: ${data.hue}, C: ${data.chroma}`;
+      return `H: ${data.hue}\nC: ${data.chroma}`;
     default:
       return '';
   }
+}
+
+const RANGE_THUMB_PX = 12;
+
+/**
+ * Pixel position of range thumb center for a value.
+ * @param {HTMLInputElement} range
+ * @param {number} value
+ */
+function rangeThumbCenterPx(range, value) {
+  const min = Number(range.min);
+  const max = Number(range.max);
+  const width = range.getBoundingClientRect().width;
+  const travel = Math.max(0, width - RANGE_THUMB_PX);
+  const t = max === min ? 0 : (value - min) / (max - min);
+  return t * travel + RANGE_THUMB_PX / 2;
+}
+
+/**
+ * @param {HTMLElement} marker
+ * @param {HTMLInputElement} range
+ * @param {number} value
+ */
+function positionChromaMaxMarker(marker, range, value) {
+  const width = range.getBoundingClientRect().width;
+  if (width <= 0) return;
+  const centerPx = rangeThumbCenterPx(range, value);
+  marker.style.left = `${(centerPx / width) * 100}%`;
+  marker.title = `Max chroma: ${value}`;
+}
+
+/**
+ * @param {HTMLElement} wrap
+ * @param {HTMLInputElement} range
+ */
+function syncSliderVisuals(wrap, range) {
+  const width = range.getBoundingClientRect().width;
+  const fill = wrap.querySelector('.slider-track-fill');
+  if (fill instanceof HTMLElement && width > 0) {
+    fill.style.width = `${rangeThumbCenterPx(range, Number(range.value))}px`;
+  }
+}
+
+/**
+ * @param {HTMLElement} wrap
+ * @param {HTMLInputElement} range
+ * @param {string} [markerKey]
+ * @param {(() => number) | null} [getMarkerMax]
+ */
+function attachSliderVisualSync(wrap, range, markerKey = null, getMarkerMax = null) {
+  const sync = () => {
+    syncSliderVisuals(wrap, range);
+    if (markerKey && getMarkerMax) {
+      const marker = wrap.querySelector(`[data-chroma-max-marker="${markerKey}"]`);
+      if (marker instanceof HTMLElement) {
+        positionChromaMaxMarker(marker, range, getMarkerMax());
+      }
+    }
+  };
+  sync();
+  const ro = new ResizeObserver(sync);
+  ro.observe(wrap);
 }
 
 function createToneControl(label, value, onChange) {
@@ -1563,7 +1668,151 @@ function createToneControl(label, value, onChange) {
 }
 
 /**
- * Fixed chroma slider: free 0–UI max, informational peak marker.
+ * @param {HTMLInputElement} range
+ */
+function attachRangePointerCapture(range) {
+  range.addEventListener('pointerdown', (e) => {
+    range.setPointerCapture(e.pointerId);
+  });
+  range.addEventListener('pointerup', (e) => {
+    if (range.hasPointerCapture(e.pointerId)) {
+      range.releasePointerCapture(e.pointerId);
+    }
+  });
+  range.addEventListener('pointercancel', (e) => {
+    if (range.hasPointerCapture(e.pointerId)) {
+      range.releasePointerCapture(e.pointerId);
+    }
+  });
+}
+
+/**
+ * @param {string} markerKey
+ */
+function createChromaMaxMarker(markerKey) {
+  const marker = document.createElement('div');
+  marker.className = 'chroma-slider-max';
+  marker.dataset.chromaMaxMarker = markerKey;
+  marker.setAttribute('aria-hidden', 'true');
+  return marker;
+}
+
+/**
+ * @param {HTMLElement} wrap
+ */
+function createSliderTrack(wrap) {
+  const track = document.createElement('div');
+  track.className = 'slider-track';
+  track.setAttribute('aria-hidden', 'true');
+  const fill = document.createElement('div');
+  fill.className = 'slider-track-fill';
+  track.appendChild(fill);
+  wrap.appendChild(track);
+}
+
+/**
+ * Shared layout: label + number input + range (optional chroma marker).
+ * @param {string} label
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ * @param {(v: number) => void} onChange
+ * @param {{
+ *   transform?: (v: number) => number,
+ *   controlKey?: string | null,
+ *   hardClampToMarker?: boolean,
+ *   getMarkerMax?: () => number,
+ *   markerKey?: string | null,
+ * }} [options]
+ */
+function createSliderControl(label, value, min, max, onChange, options = {}) {
+  const group = document.createElement('div');
+  group.className = 'control-group slider-control';
+
+  const transform = options.transform ?? ((v) => v);
+  const getMarkerMax = options.getMarkerMax;
+  const hardClamp = Boolean(options.hardClampToMarker && getMarkerMax);
+
+  const applyValue = (raw) => {
+    let v = Number(raw);
+    if (!Number.isFinite(v)) v = min;
+    v = Math.round(v);
+    v = Math.max(min, Math.min(max, v));
+    if (hardClamp && getMarkerMax) {
+      v = Math.min(v, getMarkerMax());
+    }
+    v = transform(v);
+    return v;
+  };
+
+  const lbl = document.createElement('label');
+  lbl.textContent = label;
+  group.appendChild(lbl);
+
+  const row = document.createElement('div');
+  row.className = 'slider-control-row';
+
+  const numberInput = createUiNumberInput({
+    value,
+    min,
+    max,
+    ariaLabel: `${label} value`,
+    controlKey: options.controlKey ?? null,
+  });
+
+  const wrap = document.createElement('div');
+  wrap.className = 'chroma-slider-wrap';
+  createSliderTrack(wrap);
+
+  if (getMarkerMax && options.markerKey) {
+    wrap.appendChild(createChromaMaxMarker(options.markerKey));
+  }
+
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.min = String(min);
+  range.max = String(max);
+  range.value = String(value);
+  range.setAttribute('aria-label', label);
+  if (options.controlKey) {
+    range.dataset.chromaControl = options.controlKey;
+  }
+  attachRangePointerCapture(range);
+
+  const commit = (raw) => {
+    const v = applyValue(raw);
+    numberInput.value = String(v);
+    range.value = String(v);
+    syncSliderVisuals(wrap, range);
+    if (getMarkerMax && options.markerKey) {
+      const marker = wrap.querySelector(`[data-chroma-max-marker="${options.markerKey}"]`);
+      if (marker instanceof HTMLElement) {
+        positionChromaMaxMarker(marker, range, getMarkerMax());
+      }
+    }
+    onChange(v);
+  };
+
+  numberInput.addEventListener('change', () => commit(numberInput.value));
+  range.addEventListener('input', () => commit(range.value));
+
+  row.appendChild(numberInput);
+  wrap.appendChild(range);
+  row.appendChild(wrap);
+  group.appendChild(row);
+
+  attachSliderVisualSync(
+    wrap,
+    range,
+    options.markerKey ?? null,
+    getMarkerMax ?? null,
+  );
+
+  return group;
+}
+
+/**
+ * Fixed chroma: free 0–UI max, informational peak marker + editable number.
  * @param {import('../src/engine.js').ParamConfig} param
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
@@ -1571,155 +1820,54 @@ function createToneControl(label, value, onChange) {
  * @param {number} uiMax
  */
 function createChromaFixedSlider(param, palette, mode, steps, uiMax) {
-  const group = document.createElement('div');
-  group.className = 'control-group chroma-fixed-control';
-
   const controlKey = `${palette.id}:${mode}:fixed`;
-  const peak = chromaPeakForPalette(palette, mode, steps);
-
-  const lbl = document.createElement('label');
-  lbl.textContent = `Value: ${param.value}`;
-  group.appendChild(lbl);
-
-  const wrap = document.createElement('div');
-  wrap.className = 'chroma-slider-wrap';
-
-  const marker = document.createElement('div');
-  marker.className = 'chroma-slider-max';
-  marker.dataset.chromaMaxMarker = controlKey;
-  marker.setAttribute('aria-hidden', 'true');
-  marker.title = `Max chroma: ${peak}`;
-  marker.style.left = `${Math.max(0, Math.min(100, (peak / uiMax) * 100))}%`;
-  wrap.appendChild(marker);
-
-  const input = document.createElement('input');
-  input.type = 'range';
-  input.min = '0';
-  input.max = String(uiMax);
-  input.value = String(param.value);
-  input.dataset.chromaControl = controlKey;
-  input.setAttribute('aria-label', 'Chroma value');
-  input.addEventListener('pointerdown', (e) => {
-    input.setPointerCapture(e.pointerId);
-  });
-  input.addEventListener('pointerup', (e) => {
-    if (input.hasPointerCapture(e.pointerId)) {
-      input.releasePointerCapture(e.pointerId);
-    }
-  });
-  input.addEventListener('pointercancel', (e) => {
-    if (input.hasPointerCapture(e.pointerId)) {
-      input.releasePointerCapture(e.pointerId);
-    }
-  });
-  input.addEventListener('input', () => {
-    const v = Number(input.value);
-    lbl.textContent = `Value: ${v}`;
+  return createSliderControl('Value', param.value, 0, uiMax, (v) => {
     param.value = v;
     scheduleRefreshPreviews();
+  }, {
+    controlKey,
+    markerKey: controlKey,
+    getMarkerMax: () => chromaPeakForPalette(palette, mode, steps),
+    hardClampToMarker: false,
   });
-  wrap.appendChild(input);
-  group.appendChild(wrap);
-  return group;
 }
 
 /**
- * @param {string} label
- * @param {number} value
- * @param {number} min
- * @param {number} max
- * @param {(v: number) => void} onChange
- * @param {{ transform?: (v: number) => number, controlKey?: string | null }} [options]
+ * Interpolate chroma point: marker = hard ceiling for that step.
+ * @param {{ step: number, value: number }} point
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} steps
+ * @param {number} pointIndex
+ * @param {number} uiMax
  */
-function createSliderControl(label, value, min, max, onChange, options = {}) {
-  const group = document.createElement('div');
-  group.className = 'control-group';
+function createChromaPointSlider(point, palette, mode, steps, pointIndex, uiMax) {
+  const controlKey = `${palette.id}:${mode}:point:${pointIndex}`;
+  const limit = chromaLimitAtStep(palette, mode, steps, point.step);
+  const initial = Math.min(point.value, limit);
+  point.value = initial;
 
-  const transform = options.transform ?? ((v) => v);
-
-  const lbl = document.createElement('label');
-  lbl.textContent = `${label}: ${value}`;
-  group.appendChild(lbl);
-
-  const input = document.createElement('input');
-  input.type = 'range';
-  input.min = String(min);
-  input.max = String(max);
-  input.value = String(value);
-  if (options.controlKey) {
-    input.dataset.chromaControl = options.controlKey;
-  }
-  input.addEventListener('pointerdown', (e) => {
-    input.setPointerCapture(e.pointerId);
+  return createSliderControl('Value', initial, 0, uiMax, (v) => {
+    point.value = v;
+    scheduleRefreshPreviews();
+  }, {
+    controlKey,
+    markerKey: controlKey,
+    getMarkerMax: () => chromaLimitAtStep(palette, mode, steps, point.step),
+    hardClampToMarker: true,
   });
-  input.addEventListener('pointerup', (e) => {
-    if (input.hasPointerCapture(e.pointerId)) {
-      input.releasePointerCapture(e.pointerId);
-    }
-  });
-  input.addEventListener('pointercancel', (e) => {
-    if (input.hasPointerCapture(e.pointerId)) {
-      input.releasePointerCapture(e.pointerId);
-    }
-  });
-  input.addEventListener('input', () => {
-    let v = transform(Number(input.value));
-    if (!Number.isFinite(v)) v = min;
-    input.value = String(v);
-    lbl.textContent = `${label}: ${v}`;
-    onChange(v);
-  });
-  group.appendChild(input);
-  return group;
-}
-
-/**
- * @param {string} label
- * @param {number} value
- * @param {number} min
- * @param {number} max
- * @param {(v: number) => void} onChange
- * @param {{ transform?: (v: number) => number, controlKey?: string | null }} [options]
- */
-function createNumberControl(label, value, min, max, onChange, options = {}) {
-  const group = document.createElement('div');
-  group.className = 'control-group';
-
-  const transform = options.transform ?? ((v) => v);
-
-  const lbl = document.createElement('label');
-  lbl.textContent = label;
-  group.appendChild(lbl);
-
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.min = String(min);
-  input.max = String(max);
-  input.value = String(value);
-  if (options.controlKey) {
-    input.dataset.chromaControl = options.controlKey;
-  }
-  input.addEventListener('change', () => {
-    let v = transform(Number(input.value));
-    if (!Number.isFinite(v)) v = min;
-    v = Math.max(min, Math.min(max, v));
-    v = transform(v);
-    input.value = String(v);
-    onChange(v);
-  });
-  group.appendChild(input);
-  return group;
 }
 
 function createStepSelect(label, value, steps, disabled, onChange) {
   const group = document.createElement('div');
-  group.className = 'control-group';
+  group.className = 'control-group control-group--step';
 
   const lbl = document.createElement('label');
   lbl.textContent = label;
   group.appendChild(lbl);
 
   const select = document.createElement('select');
+  select.className = 'ui-control ui-control--select';
   select.disabled = disabled;
   for (const step of steps) {
     const opt = document.createElement('option');
@@ -1746,6 +1894,7 @@ function createBezierInputs(bezier, onChange, disabled = false) {
 
   const input = document.createElement('input');
   input.type = 'text';
+  input.className = 'ui-ghost ui-ghost--block';
   input.value = formatBezierCss(bezier);
   input.disabled = disabled;
   input.spellcheck = false;

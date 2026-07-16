@@ -61,8 +61,8 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
     │   └── material-color-utilities.mjs
     └── app/
         ├── index.html      # Interaktivní GUI
-        ├── app.js
-        └── engine-ui.css
+        ├── app.js          # Vazba GUI, renderování a ovládání engine
+        └── engine-ui.css   # Styly a layout aplikace
 ```
 
 Spuštění: `npx serve . -l 3456` z kořene projektu → `http://localhost:3456/color-engine/app/`
