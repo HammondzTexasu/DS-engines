@@ -1060,11 +1060,6 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
   const body = document.createElement('div');
   body.className = 'param-settings-body states-delta-body';
 
-  const hint = document.createElement('p');
-  hint.className = 'states-delta-hint';
-  hint.textContent = 'Live ΔT vs background (step 0). Hover = state1, pressed = state2. Not written to CSS tokens.';
-  body.appendChild(hint);
-
   const row = document.createElement('div');
   row.className = 'control-row';
 
@@ -1086,11 +1081,6 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
   }));
 
   body.appendChild(row);
-
-  const labels = document.createElement('div');
-  labels.className = 'states-delta-labels';
-  labels.innerHTML = '<span>GUI: Hover → state1</span><span>GUI: Pressed → state2</span>';
-  body.appendChild(labels);
 
   group.appendChild(body);
   return group;
