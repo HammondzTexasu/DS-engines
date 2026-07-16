@@ -101,8 +101,9 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
 * **`keyPalette.lm|dm.states`** (volitelné; při importu doplní defaulty):
-  * `{ "deltaMin": 5, "deltaMax": 20, "state2Scale": 2 }`
+  * `{ "deltaMin": 5, "deltaMax": 20, "state2Scale": 2, "relativeChroma": true }`
   * Live interaction math — **nejsou** CSS tokeny
+  * `relativeChroma` — C jako % gamutu při změně T (default `true`)
 
 **Export** (`exportEngineConfig`): fixed chroma ořízne na peak; interpolate přepočte relative + clamp; bez `gamutLimit`; `states` se exportují s key palette.
 
@@ -119,7 +120,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `createDefaultState()` | Výchozí engine state |
 | `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`) |
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
-| `createDefaultInteractionStates()` | Default `deltaMin` / `deltaMax` / `state2Scale` |
+| `createDefaultInteractionStates()` | Default `deltaMin` / `deltaMax` / `state2Scale` / `relativeChroma` |
 | `importEngineConfig(json)` | JSON → state |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** interpolate chroma ve state) |

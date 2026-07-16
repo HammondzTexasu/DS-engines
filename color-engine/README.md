@@ -68,4 +68,5 @@ Live math pro stavy na **krocích palety** (ne `min`/`max`). Do CSS tokenů se *
 * `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default min 5, max 20).
 * Směr: T > 50 → ztmavit; jinak zesvětlit.
 * **state1** = 1× delta (GUI: hover); **state2** = delta × `state2Scale` (default 2, GUI: pressed).
+* **relativeChroma** (default zapnuto): při posunu T drží C jako % HCT gamutu (stejný princip jako u interpolate chroma); vypnuto = absolutní C + clamp.
 * Nastavení je v configu u `keyPalette.lm.states` / `keyPalette.dm.states`. Custom palety používají stejná pravidla (bg z key min).

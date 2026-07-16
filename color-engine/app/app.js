@@ -1029,6 +1029,9 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
     config.states = createDefaultInteractionStates();
   }
   const states = config.states;
+  if (typeof states.relativeChroma !== 'boolean') {
+    states.relativeChroma = true;
+  }
   const groupKey = `key:${mode}:states`;
   const isExpanded = expandedParamGroups.has(groupKey);
 
@@ -1059,6 +1062,19 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
 
   const body = document.createElement('div');
   body.className = 'param-settings-body states-delta-body';
+
+  const relativeRow = document.createElement('label');
+  relativeRow.className = 'checkbox-row';
+  const relativeCb = document.createElement('input');
+  relativeCb.type = 'checkbox';
+  relativeCb.checked = states.relativeChroma !== false;
+  relativeCb.addEventListener('change', () => {
+    states.relativeChroma = relativeCb.checked;
+    scheduleRefreshPreviews();
+  });
+  relativeRow.appendChild(relativeCb);
+  relativeRow.appendChild(document.createTextNode(' Relative Chroma'));
+  body.appendChild(relativeRow);
 
   const row = document.createElement('div');
   row.className = 'control-row';

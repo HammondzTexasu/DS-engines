@@ -516,12 +516,6 @@ input[type='range']:focus-visible::-moz-range-thumb {
   cursor: pointer;
 }
 
-.states-delta-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .param-settings-toggle {
   justify-content: center;
   gap: 6px;
@@ -554,6 +548,10 @@ input[type='range']:focus-visible::-moz-range-thumb {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.param-settings-body.states-delta-body {
+  gap: 8px;
 }
 
 .param-section {

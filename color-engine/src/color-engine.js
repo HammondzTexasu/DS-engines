@@ -21,7 +21,8 @@ import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.m
  * Interaction state deltas (live math; not emitted as CSS tokens).
  * `deltaMin`/`deltaMax` — |ΔT| when swatch tone is near / far from background (step 0) tone.
  * `state2Scale` — multiplier for state2 vs state1 (GUI: pressed vs hover).
- * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesConfig
+ * `relativeChroma` — keep C as % of HCT gamut when tone shifts (default true).
+ * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number, relativeChroma: boolean }} InteractionStatesConfig
  */
 /** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig, interpolatorOverride?: boolean }} KeyPaletteConfig */
 /** @typedef {{ lm: KeyPaletteConfig, dm: KeyPaletteConfig & { interpolatorOverride: boolean } }} KeyPaletteState */
@@ -326,6 +327,7 @@ export function createDefaultInteractionStates() {
     deltaMin: DEFAULT_STATE_DELTA_MIN,
     deltaMax: DEFAULT_STATE_DELTA_MAX,
     state2Scale: DEFAULT_STATE2_SCALE,
+    relativeChroma: true,
   };
 }
 
@@ -361,7 +363,8 @@ export function applyInteractionTone(colorTone, bgTone, states, level) {
 }
 
 /**
- * Live interaction color for a palette step (not min/max). Keeps H; clamps C at new T.
+ * Live interaction color for a palette step (not min/max).
+ * Keeps H; shifts T. Chroma: relative % of gamut when `states.relativeChroma` (default), else absolute C + clamp.
  * @param {{ hue: number, chroma: number, tone: number }} color
  * @param {number} bgTone — tone of background (key min / step 0)
  * @param {InteractionStatesConfig} states
@@ -371,7 +374,18 @@ export function applyInteractionTone(colorTone, bgTone, states, level) {
 export function colorAtInteractionState(color, bgTone, states, level) {
   const tone = applyInteractionTone(color.tone, bgTone, states, level);
   const hue = color.hue;
-  const chroma = clampChroma(color.chroma, hue, tone);
+  const useRelative = states.relativeChroma !== false;
+
+  let chroma;
+  if (useRelative) {
+    const limitFrom = maxChromaForHueTone(hue, color.tone);
+    const ratio = chromaRatioFromValue(color.chroma, limitFrom);
+    const limitTo = maxChromaForHueTone(hue, tone);
+    chroma = Math.round(ratio * limitTo);
+  } else {
+    chroma = clampChroma(color.chroma, hue, tone);
+  }
+
   return {
     hue,
     chroma,
@@ -876,6 +890,9 @@ function parseInteractionStates(value, label) {
   const state2Scale = typeof value.state2Scale === 'number' && Number.isFinite(value.state2Scale)
     ? value.state2Scale
     : DEFAULT_STATE2_SCALE;
+  const relativeChroma = typeof value.relativeChroma === 'boolean'
+    ? value.relativeChroma
+    : true;
 
   if (deltaMin < 0 || deltaMax < 0 || state2Scale < 0) {
     throw new Error(`${label} values must be non-negative`);
@@ -885,6 +902,7 @@ function parseInteractionStates(value, label) {
     deltaMin,
     deltaMax: Math.max(deltaMin, deltaMax),
     state2Scale,
+    relativeChroma,
   };
 }
 
