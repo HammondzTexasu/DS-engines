@@ -15,6 +15,8 @@ import {
   maxChromaForHueTone,
   hexToHct,
   hctToHex,
+  colorAtInteractionState,
+  createDefaultInteractionStates,
   getSteps,
   CHROMA_MAX,
   KEY_PALETTE_NAME,
@@ -281,6 +283,10 @@ function collectExpandedParamGroups() {
   /** @type {Set<string>} */
   const expanded = new Set();
   for (const group of app.querySelectorAll('.param-settings-group:not(.is-collapsed)')) {
+    if (group.dataset.groupKey) {
+      expanded.add(group.dataset.groupKey);
+      continue;
+    }
     const fieldset = group.closest('.custom-palette-fieldset');
     const segment = group.closest('.palette-mode-segment');
     const paletteId = fieldset?.dataset.paletteId;
@@ -514,7 +520,7 @@ function render() {
   header.appendChild(title);
   app.appendChild(header);
 
-  app.appendChild(createKeyPaletteFieldset(keyResults, steps, endStep));
+  app.appendChild(createKeyPaletteFieldset(keyResults, steps, endStep, expandedParamGroups));
 
   for (const palette of state.customPalettes) {
     app.appendChild(createCustomPaletteFieldset(palette, keyResults, steps, endStep, expandedParamGroups));
@@ -778,11 +784,35 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textM
   nameEl.textContent = name;
 
   const pickerActive = colorEl.classList.contains('hct-picker-open');
+  const interactionActive = colorEl.classList.contains('swatch-interactive')
+    && colorEl._interaction
+    && colorEl._interaction.level !== 0;
 
-  if (!pickerActive) {
+  if (!pickerActive && !interactionActive) {
     colorEl.style.background = hex;
     if (colorEl._currentHex !== undefined) {
       colorEl._currentHex = hex;
+    }
+  }
+
+  if (colorEl._interaction && data && typeof data.tone === 'number') {
+    colorEl._interaction.restHex = hex;
+    colorEl._interaction.hue = data.hue ?? 0;
+    colorEl._interaction.chroma = data.chroma ?? 0;
+    colorEl._interaction.tone = data.tone;
+    if (colorEl._interaction.level !== 0) {
+      const bgTone = hexToHct(colorEl._interaction.getBgHex()).tone;
+      const next = colorAtInteractionState(
+        {
+          hue: colorEl._interaction.hue,
+          chroma: colorEl._interaction.chroma,
+          tone: colorEl._interaction.tone,
+        },
+        bgTone,
+        colorEl._interaction.getStates(),
+        colorEl._interaction.level,
+      );
+      colorEl.style.background = next.hex;
     }
   }
 
@@ -791,9 +821,37 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textM
   valueEl.style.color = getSwatchTextColor(index, total, textMode);
 
   const isEditable = colorEl.classList.contains('swatch-editable');
+  const isInteractive = colorEl.classList.contains('swatch-interactive');
   colorEl.title = isEditable
     ? `${name}: ${hex}\nKlikni pro změnu barvy`
-    : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
+    : isInteractive
+      ? `${name}: ${hex}\nHover = state1, pressed = state2`
+      : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
+}
+
+/**
+ * @param {string} previewId
+ * @returns {{
+ *   mode: 'lm' | 'dm',
+ *   getBgHex: () => string,
+ *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
+ * } | null}
+ */
+function getInteractionForPreview(previewId) {
+  const mode = getTextMode(previewId);
+  if (previewId.startsWith('key-') || previewId.startsWith('custom-')) {
+    return {
+      mode,
+      getBgHex: () => state.keyPalette[mode].min,
+      getStates: () => {
+        if (!state.keyPalette[mode].states) {
+          state.keyPalette[mode].states = createDefaultInteractionStates();
+        }
+        return state.keyPalette[mode].states;
+      },
+    };
+  }
+  return null;
 }
 
 /**
@@ -808,7 +866,15 @@ function replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat
   const existing = app.querySelector(`[data-preview="${previewId}"]`);
   if (!existing) return;
   const textMode = getTextMode(previewId);
-  const row = createSwatchRow(paletteResult, steps, endStep, valueFormat, editOptions, textMode);
+  const row = createSwatchRow(
+    paletteResult,
+    steps,
+    endStep,
+    valueFormat,
+    editOptions,
+    textMode,
+    getInteractionForPreview(previewId),
+  );
   row.dataset.preview = previewId;
   existing.replaceWith(row);
 }
@@ -901,13 +967,17 @@ function wrapPaletteFieldset(fs, titleContent, headerAction = null) {
  * @param {object} keyResults
  * @param {number[]} steps
  * @param {number} endStep
+ * @param {Set<string>} [expandedParamGroups]
  */
-function createKeyPaletteFieldset(keyResults, steps, endStep) {
+function createKeyPaletteFieldset(keyResults, steps, endStep, expandedParamGroups = new Set()) {
   const fs = document.createElement('fieldset');
   fs.className = 'key-palette-fieldset';
 
   for (const mode of /** @type {const} */ (['lm', 'dm'])) {
     const config = state.keyPalette[mode];
+    if (!config.states) {
+      config.states = createDefaultInteractionStates();
+    }
     const paletteResult = keyResults[mode];
     const isDm = mode === 'dm';
 
@@ -933,15 +1003,97 @@ function createKeyPaletteFieldset(keyResults, steps, endStep) {
         config.max = hex;
         scheduleRefreshPreviews();
       },
-    }, mode);
+    }, mode, {
+      mode,
+      getBgHex: () => state.keyPalette[mode].min,
+      getStates: () => state.keyPalette[mode].states,
+    });
     swatchRow.dataset.preview = `key-${mode}`;
     segment.appendChild(swatchRow);
 
     segment.appendChild(createKeyPaletteControls(config, endStep, isDm));
+    segment.appendChild(createStatesDeltaGroup(config, mode, expandedParamGroups));
     fs.appendChild(segment);
   }
 
   return wrapPaletteFieldset(fs, KEY_PALETTE_NAME, createStepCountControl());
+}
+
+/**
+ * @param {import('../src/color-engine.js').KeyPaletteConfig} config
+ * @param {'lm' | 'dm'} mode
+ * @param {Set<string>} expandedParamGroups
+ */
+function createStatesDeltaGroup(config, mode, expandedParamGroups) {
+  if (!config.states) {
+    config.states = createDefaultInteractionStates();
+  }
+  const states = config.states;
+  const groupKey = `key:${mode}:states`;
+  const isExpanded = expandedParamGroups.has(groupKey);
+
+  const group = document.createElement('div');
+  group.className = `param-settings-group${isExpanded ? '' : ' is-collapsed'}`;
+  group.dataset.groupKey = groupKey;
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'ui-ghost param-settings-toggle';
+  toggleBtn.setAttribute('aria-expanded', String(isExpanded));
+
+  const chevron = document.createElement('span');
+  chevron.className = 'param-settings-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = '▾';
+
+  const titleText = document.createElement('span');
+  titleText.textContent = `States delta (${mode.toUpperCase()})`;
+
+  toggleBtn.appendChild(chevron);
+  toggleBtn.appendChild(titleText);
+  toggleBtn.addEventListener('click', () => {
+    group.classList.toggle('is-collapsed');
+    toggleBtn.setAttribute('aria-expanded', String(!group.classList.contains('is-collapsed')));
+  });
+  group.appendChild(toggleBtn);
+
+  const body = document.createElement('div');
+  body.className = 'param-settings-body states-delta-body';
+
+  const hint = document.createElement('p');
+  hint.className = 'states-delta-hint';
+  hint.textContent = 'Live ΔT vs background (step 0). Hover = state1, pressed = state2. Not written to CSS tokens.';
+  body.appendChild(hint);
+
+  const row = document.createElement('div');
+  row.className = 'control-row';
+
+  row.appendChild(createSliderControl('Delta min (near bg)', states.deltaMin, 0, 40, (v) => {
+    states.deltaMin = v;
+    if (states.deltaMax < states.deltaMin) states.deltaMax = states.deltaMin;
+    scheduleRefreshPreviews();
+  }));
+
+  row.appendChild(createSliderControl('Delta max (far from bg)', states.deltaMax, 0, 40, (v) => {
+    states.deltaMax = v;
+    if (states.deltaMin > states.deltaMax) states.deltaMin = states.deltaMax;
+    scheduleRefreshPreviews();
+  }));
+
+  row.appendChild(createSliderControl('State2 scale (pressed)', states.state2Scale, 1, 4, (v) => {
+    states.state2Scale = v;
+    scheduleRefreshPreviews();
+  }));
+
+  body.appendChild(row);
+
+  const labels = document.createElement('div');
+  labels.className = 'states-delta-labels';
+  labels.innerHTML = '<span>GUI: Hover → state1</span><span>GUI: Pressed → state2</span>';
+  body.appendChild(labels);
+
+  group.appendChild(body);
+  return group;
 }
 
 /**
@@ -1094,7 +1246,16 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
     label.textContent = modeLabel;
     segment.appendChild(label);
 
-    const swatchRow = createSwatchRow(customResult, steps, endStep, 'hc', null, mode);
+    const swatchRow = createSwatchRow(customResult, steps, endStep, 'hc', null, mode, {
+      mode,
+      getBgHex: () => state.keyPalette[mode].min,
+      getStates: () => {
+        if (!state.keyPalette[mode].states) {
+          state.keyPalette[mode].states = createDefaultInteractionStates();
+        }
+        return state.keyPalette[mode].states;
+      },
+    });
     swatchRow.dataset.preview = `custom-${palette.id}-${mode}`;
     segment.appendChild(swatchRow);
 
@@ -1446,8 +1607,14 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
  *   minMemoryKey?: string,
  *   maxMemoryKey?: string,
  * }} [editOptions]
+ * @param {'lm' | 'dm'} [textMode]
+ * @param {{
+ *   mode: 'lm' | 'dm',
+ *   getBgHex: () => string,
+ *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
+ * } | null} [interaction]
  */
-function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', editOptions = null, textMode = 'lm') {
+function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', editOptions = null, textMode = 'lm', interaction = null) {
   const row = document.createElement('div');
   row.className = 'swatch-row';
   row.dataset.textMode = textMode;
@@ -1461,11 +1628,21 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
       onDone: editOptions.onEditDone,
       memoryKey: editOptions.minMemoryKey,
     }
-    : null, index++, total, textMode));
+    : null, index++, total, textMode, null));
 
   for (const step of steps) {
     const data = paletteResult.steps[step];
-    row.appendChild(createSwatch(String(step), data.hex, data, valueFormat, null, index++, total, textMode));
+    row.appendChild(createSwatch(
+      String(step),
+      data.hex,
+      data,
+      valueFormat,
+      null,
+      index++,
+      total,
+      textMode,
+      interaction,
+    ));
   }
 
   row.appendChild(createSwatch(String(endStep + 10), paletteResult.max, null, valueFormat, editOptions?.onMaxChange
@@ -1474,7 +1651,8 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
       onDone: editOptions.onEditDone,
       memoryKey: editOptions.maxMemoryKey,
     }
-    : null, index, total, textMode));
+    : null, index, total, textMode, null));
+
   return row;
 }
 
@@ -1487,8 +1665,13 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
  * @param {number} [index]
  * @param {number} [total]
  * @param {'lm' | 'dm'} [textMode]
+ * @param {{
+ *   mode: 'lm' | 'dm',
+ *   getBgHex: () => string,
+ *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
+ * } | null} [interaction]
  */
-function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 0, total = 1, textMode = 'lm') {
+function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 0, total = 1, textMode = 'lm', interaction = null) {
   const wrap = document.createElement('div');
   wrap.className = 'swatch-wrap';
 
@@ -1504,7 +1687,9 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 
   const valueText = formatSwatchValue(data, valueFormat);
   color.title = editHandler
     ? `${name}: ${hex}\nKlikni pro změnu barvy`
-    : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
+    : interaction
+      ? `${name}: ${hex}\nHover = state1, pressed = state2`
+      : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
 
   const valueEl = document.createElement('div');
   valueEl.className = 'swatch-value';
@@ -1514,10 +1699,77 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 
 
   if (editHandler) {
     attachSwatchColorEdit(color, hex, editHandler);
+  } else if (interaction && data && typeof data.tone === 'number') {
+    attachSwatchInteraction(color, {
+      restHex: hex,
+      hue: data.hue ?? 0,
+      chroma: data.chroma ?? 0,
+      tone: data.tone,
+      getBgHex: interaction.getBgHex,
+      getStates: interaction.getStates,
+    });
   }
 
   wrap.appendChild(color);
   return wrap;
+}
+
+/**
+ * Live state1 (hover) / state2 (pressed) preview on palette steps.
+ * @param {HTMLElement} colorEl
+ * @param {{
+ *   restHex: string,
+ *   hue: number,
+ *   chroma: number,
+ *   tone: number,
+ *   getBgHex: () => string,
+ *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
+ * }} opts
+ */
+function attachSwatchInteraction(colorEl, opts) {
+  colorEl.classList.add('swatch-interactive');
+  colorEl._interaction = {
+    restHex: opts.restHex,
+    hue: opts.hue,
+    chroma: opts.chroma,
+    tone: opts.tone,
+    getBgHex: opts.getBgHex,
+    getStates: opts.getStates,
+    level: /** @type {0 | 1 | 2} */ (0),
+  };
+
+  const showLevel = (level) => {
+    const ctx = colorEl._interaction;
+    if (!ctx) return;
+    ctx.level = level;
+    if (level === 0) {
+      colorEl.style.background = ctx.restHex;
+      return;
+    }
+    const bgTone = hexToHct(ctx.getBgHex()).tone;
+    const next = colorAtInteractionState(
+      { hue: ctx.hue, chroma: ctx.chroma, tone: ctx.tone },
+      bgTone,
+      ctx.getStates(),
+      level,
+    );
+    colorEl.style.background = next.hex;
+  };
+
+  colorEl.addEventListener('pointerenter', () => {
+    if (colorEl._interaction?.level === 2) return;
+    showLevel(1);
+  });
+  colorEl.addEventListener('pointerleave', () => showLevel(0));
+  colorEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    showLevel(2);
+  });
+  colorEl.addEventListener('pointerup', () => {
+    if (colorEl.matches(':hover')) showLevel(1);
+    else showLevel(0);
+  });
+  colorEl.addEventListener('pointercancel', () => showLevel(0));
 }
 
 /**

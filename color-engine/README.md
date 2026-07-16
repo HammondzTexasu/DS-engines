@@ -59,3 +59,13 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 **Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků.
 
 **Názvy custom palet:** jen `a–z`, `0–9`, `-` (stejný tvar v configu i v názvech CSS tokenů).
+
+## 5. Interaction states (delta T)
+
+Live math pro stavy na **krocích palety** (ne `min`/`max`). Do CSS tokenů se **nezapisuje**.
+
+* Pozadí pro blízkost = tone barvy **`0` (`min`)** v daném LM/DM.
+* `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default min 5, max 20).
+* Směr: T > 50 → ztmavit; jinak zesvětlit.
+* **state1** = 1× delta (GUI: hover); **state2** = delta × `state2Scale` (default 2, GUI: pressed).
+* Nastavení je v configu u `keyPalette.lm.states` / `keyPalette.dm.states`. Custom palety používají stejná pravidla (bg z key min).

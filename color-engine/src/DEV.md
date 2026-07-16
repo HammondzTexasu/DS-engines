@@ -100,10 +100,13 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
+* **`keyPalette.lm|dm.states`** (volitelné; při importu doplní defaulty):
+  * `{ "deltaMin": 5, "deltaMax": 20, "state2Scale": 2 }`
+  * Live interaction math — **nejsou** CSS tokeny
 
-**Export** (`exportEngineConfig`): fixed chroma ořízne na peak; interpolate přepočte relative + clamp; bez `gamutLimit`.
+**Export** (`exportEngineConfig`): fixed chroma ořízne na peak; interpolate přepočte relative + clamp; bez `gamutLimit`; `states` se exportují s key palette.
 
-**Import** (`importEngineConfig`): validace → nové `id` palet → clamp/relative normalizace chroma.
+**Import** (`importEngineConfig`): validace → nové `id` palet → clamp/relative normalizace chroma; chybějící `states` → defaulty.
 
 ---
 
@@ -116,18 +119,20 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `createDefaultState()` | Výchozí engine state |
 | `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`) |
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
+| `createDefaultInteractionStates()` | Default `deltaMin` / `deltaMax` / `state2Scale` |
 | `importEngineConfig(json)` | JSON → state |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** interpolate chroma ve state) |
 | `normalizeStateForStepCount(state)` | Po změně `state.stepCount` srovná interpolate body na novou mřížku |
+| `colorAtInteractionState(color, bgTone, states, level)` | Live state1/state2 barva (level `1` \| `2`) |
 
-Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`.
-
+Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE2_SCALE`, `INTERACTION_TONE_PIVOT`.
 ### 5.2 Low-level (playground / tooling)
 
 Headless pipeline je typicky nepotřebuje; `app/` je používá.
 
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
+* **Interaction states:** `interactionDeltaMagnitude`, `applyInteractionTone`, `colorAtInteractionState`
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `applyRelativeChromaParam`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`

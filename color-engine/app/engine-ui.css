@@ -512,8 +512,29 @@ input[type='range']:focus-visible::-moz-range-thumb {
   cursor: not-allowed;
 }
 
-.param-settings-group {
-  margin-top: 8px;
+.swatch-interactive {
+  cursor: pointer;
+}
+
+.states-delta-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.states-delta-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ui-fg-muted);
+}
+
+.states-delta-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  font-size: 12px;
+  color: var(--ui-fg-muted);
 }
 
 .param-settings-toggle {

@@ -17,7 +17,13 @@ import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.m
  * @typedef {{ step: number, value: number, ratio?: number, gamutLimit?: number }} ParamPoint
  */
 /** @typedef {{ mode: 'fixed', value: number } | { mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[] }} ParamConfig */
-/** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, interpolatorOverride?: boolean }} KeyPaletteConfig */
+/**
+ * Interaction state deltas (live math; not emitted as CSS tokens).
+ * `deltaMin`/`deltaMax` — |ΔT| when swatch tone is near / far from background (step 0) tone.
+ * `state2Scale` — multiplier for state2 vs state1 (GUI: pressed vs hover).
+ * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesConfig
+ */
+/** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig, interpolatorOverride?: boolean }} KeyPaletteConfig */
 /** @typedef {{ lm: KeyPaletteConfig, dm: KeyPaletteConfig & { interpolatorOverride: boolean } }} KeyPaletteState */
 /** @typedef {{ name: string, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig } }} CustomPaletteConfig */
 /** @typedef {{ stepCount: number, keyPalette: KeyPaletteState, customPalettes: Array<CustomPaletteConfig & { id: string }> }} EngineState */
@@ -37,6 +43,18 @@ export const KEY_PALETTE_NAME = 'key-palette';
 
 /** Engine ceiling for chroma (Material Web HCT picker range). */
 export const CHROMA_MAX = 150;
+
+/** Default |ΔT| when swatch tone equals background tone (step 0). */
+export const DEFAULT_STATE_DELTA_MIN = 5;
+
+/** Default |ΔT| when |swatchTone − bgTone| is 100. */
+export const DEFAULT_STATE_DELTA_MAX = 20;
+
+/** Default state2 magnitude = state1 × this scale. */
+export const DEFAULT_STATE2_SCALE = 2;
+
+/** HCT tone pivot: above → darken on interaction; at/below → lighten. */
+export const INTERACTION_TONE_PIVOT = 50;
 
 export const ENGINE_CONFIG_VERSION = 1;
 
@@ -297,6 +315,68 @@ export function hexToHct(hex) {
     chroma: Math.round(hct.chroma),
     tone: Math.round(hct.tone),
     hex: hexFromArgb(argb),
+  };
+}
+
+/**
+ * @returns {InteractionStatesConfig}
+ */
+export function createDefaultInteractionStates() {
+  return {
+    deltaMin: DEFAULT_STATE_DELTA_MIN,
+    deltaMax: DEFAULT_STATE_DELTA_MAX,
+    state2Scale: DEFAULT_STATE2_SCALE,
+  };
+}
+
+/**
+ * |ΔT| from proximity of swatch tone to background tone (step 0).
+ * Closer to bg → nearer `deltaMin`; farther → nearer `deltaMax`.
+ * @param {number} colorTone
+ * @param {number} bgTone — HCT tone of key min (step 0)
+ * @param {InteractionStatesConfig} states
+ * @returns {number}
+ */
+export function interactionDeltaMagnitude(colorTone, bgTone, states) {
+  const diff = Math.min(100, Math.abs(Number(colorTone) - Number(bgTone)));
+  const min = Number(states.deltaMin);
+  const max = Number(states.deltaMax);
+  return min + (diff / 100) * (max - min);
+}
+
+/**
+ * Tone after interaction state1 (scale 1) or state2 (`state2Scale`).
+ * @param {number} colorTone
+ * @param {number} bgTone
+ * @param {InteractionStatesConfig} states
+ * @param {1 | 2} level
+ * @returns {number}
+ */
+export function applyInteractionTone(colorTone, bgTone, states, level) {
+  const delta = interactionDeltaMagnitude(colorTone, bgTone, states);
+  const scale = level === 2 ? Number(states.state2Scale) : 1;
+  const amount = delta * scale;
+  const next = colorTone > INTERACTION_TONE_PIVOT ? colorTone - amount : colorTone + amount;
+  return Math.min(100, Math.max(0, next));
+}
+
+/**
+ * Live interaction color for a palette step (not min/max). Keeps H; clamps C at new T.
+ * @param {{ hue: number, chroma: number, tone: number }} color
+ * @param {number} bgTone — tone of background (key min / step 0)
+ * @param {InteractionStatesConfig} states
+ * @param {1 | 2} level
+ * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
+ */
+export function colorAtInteractionState(color, bgTone, states, level) {
+  const tone = applyInteractionTone(color.tone, bgTone, states, level);
+  const hue = color.hue;
+  const chroma = clampChroma(color.chroma, hue, tone);
+  return {
+    hue,
+    chroma,
+    tone: Math.round(tone),
+    hex: hctToHex(hue, chroma, tone),
   };
 }
 
@@ -638,6 +718,7 @@ export function createDefaultKeyPalette() {
       start: { tone: 96 },
       end: { tone: 7 },
       interpolator: [...DEFAULT_BEZIER],
+      states: createDefaultInteractionStates(),
     },
     dm: {
       min: '#000000',
@@ -646,6 +727,7 @@ export function createDefaultKeyPalette() {
       end: { tone: 93 },
       interpolator: [0.32, 0.23, 0.68, 0.82],
       interpolatorOverride: false,
+      states: createDefaultInteractionStates(),
     },
   };
 }
@@ -775,6 +857,40 @@ function parseParamConfig(value) {
 /**
  * @param {unknown} value
  * @param {string} label
+ * @returns {InteractionStatesConfig}
+ */
+function parseInteractionStates(value, label) {
+  if (value == null) {
+    return createDefaultInteractionStates();
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Invalid ${label}`);
+  }
+
+  const deltaMin = typeof value.deltaMin === 'number' && Number.isFinite(value.deltaMin)
+    ? value.deltaMin
+    : DEFAULT_STATE_DELTA_MIN;
+  const deltaMax = typeof value.deltaMax === 'number' && Number.isFinite(value.deltaMax)
+    ? value.deltaMax
+    : DEFAULT_STATE_DELTA_MAX;
+  const state2Scale = typeof value.state2Scale === 'number' && Number.isFinite(value.state2Scale)
+    ? value.state2Scale
+    : DEFAULT_STATE2_SCALE;
+
+  if (deltaMin < 0 || deltaMax < 0 || state2Scale < 0) {
+    throw new Error(`${label} values must be non-negative`);
+  }
+
+  return {
+    deltaMin,
+    deltaMax: Math.max(deltaMin, deltaMax),
+    state2Scale,
+  };
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} label
  * @returns {KeyPaletteConfig}
  */
 function parseKeyPaletteMode(value, label) {
@@ -789,6 +905,7 @@ function parseKeyPaletteMode(value, label) {
     start: { tone: parseTone(value.start?.tone, `${label}.start.tone`) },
     end: { tone: parseTone(value.end?.tone, `${label}.end.tone`) },
     interpolator: parseBezier(value.interpolator, `${label}.interpolator`),
+    states: parseInteractionStates(value.states, `${label}.states`),
   };
 
   if ('interpolatorOverride' in value) {
