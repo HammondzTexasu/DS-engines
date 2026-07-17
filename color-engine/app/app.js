@@ -23,12 +23,22 @@ import {
   LINEAR_BEZIER,
   createDefaultState,
   createCustomPalette,
+  moveCustomPalette,
   createFixedParam,
   createInterpolateParam,
   normalizeStateForStepCount,
   exportEngineConfig,
   importEngineConfig,
   generateSystem,
+  formatIncludeSteps,
+  parseIncludeStepsInput,
+  resolveIncludeSteps,
+  normalizeIncludeSteps,
+  collapseParamsForSingleIncludeStep,
+  isSingleIncludeStep,
+  applyRelativeFixedChromaAtStep,
+  applyBrandColor,
+  parseBrandHex,
 } from '../src/color-engine.js';
 
 /** @type {ReturnType<typeof createDefaultState>} */
@@ -36,6 +46,15 @@ let state = createDefaultState();
 
 /** @type {{ message: string, isError: boolean } | null} */
 let pendingConfigStatus = null;
+
+/**
+ * GUI-only brand seed link (not part of engine config).
+ * @type {{ hex: string, paletteId: string } | null}
+ */
+let brandLink = null;
+
+/** Perfect fit toggle (bend LM key curve). Persists in GUI session only. */
+let brandPerfectFit = false;
 
 let pageDarkMode = false;
 
@@ -245,7 +264,6 @@ function createDarkModeToggle() {
   btn.className = 'ui-btn dark-mode-toggle';
   btn.setAttribute('aria-label', 'Dark mode');
   btn.setAttribute('aria-pressed', String(pageDarkMode));
-  btn.classList.toggle('is-active', pageDarkMode);
   btn.innerHTML = `<svg class="dark-mode-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
   btn.addEventListener('click', () => {
     pageDarkMode = !pageDarkMode;
@@ -257,7 +275,6 @@ function createDarkModeToggle() {
 
 function syncDarkModeToggle() {
   if (!darkModeToggleEl) return;
-  darkModeToggleEl.classList.toggle('is-active', pageDarkMode);
   darkModeToggleEl.setAttribute('aria-pressed', String(pageDarkMode));
 }
 
@@ -307,10 +324,11 @@ function formatEngineConfigJson() {
   return JSON.stringify(exportEngineConfig(state), null, 2);
 }
 
-function patchTokensOutput() {
+/** @param {string} [tokensCss] */
+function patchTokensOutput(tokensCss) {
   const output = app.querySelector('[data-panel="tokens"] .code-output');
   if (!output) return;
-  output.textContent = generateSystem(state).tokensCss;
+  output.textContent = tokensCss ?? generateSystem(state).tokensCss;
 }
 
 function patchConfigOutput() {
@@ -378,7 +396,37 @@ function applyImportedConfig(raw) {
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
   state = importEngineConfig(parsed);
   hctPickerMemory.clear();
+  brandLink = null;
   render();
+}
+
+/**
+ * Clear GUI brand seed link (config values may have been edited by hand).
+ */
+function clearBrandLink() {
+  if (!brandLink) return;
+  brandLink = null;
+  const input = app?.querySelector('.ui-control--brand-hex');
+  if (input instanceof HTMLInputElement) {
+    input.value = '';
+  }
+}
+
+/**
+ * After key grid changes, re-bend LM curve so Perfect fit still lands on brand T.
+ * No-op when Perfect fit is off (H/C are independent of stepCount).
+ */
+function reapplyBrandPerfectFitAfterStepCountChange() {
+  if (!brandLink || !brandPerfectFit) return;
+  try {
+    const result = applyBrandColor(state, brandLink.hex, {
+      perfectFit: true,
+      paletteId: brandLink.paletteId,
+    });
+    brandLink = { hex: result.hex, paletteId: result.paletteId };
+  } catch {
+    /* keep previous link + curve */
+  }
 }
 
 function createConfigPanelBody() {
@@ -618,7 +666,24 @@ function syncChromaMaxMarker(controlKey, maxChroma) {
  */
 function syncChromaControls(palette, mode, keyResult, steps) {
   const chroma = palette[mode].chroma;
+  const published = resolveIncludeSteps(palette.includeSteps, steps);
+
   if (chroma.mode === 'fixed') {
+    if (isSingleIncludeStep(palette.includeSteps, steps)) {
+      const step = published[0];
+      const controlKey = `${palette.id}:${mode}:single:${step}`;
+      const limit = chromaLimitAtStep(palette[mode].hue, keyResult, steps, step);
+      syncChromaMaxMarker(controlKey, limit);
+      app.querySelectorAll(`input[data-chroma-control="${controlKey}"]`).forEach((el) => {
+        if (!(el instanceof HTMLInputElement)) return;
+        el.value = String(chroma.value);
+        if (el.type === 'range') {
+          const wrap = el.parentElement;
+          if (wrap) syncSliderVisuals(wrap, el);
+        }
+      });
+      return;
+    }
     syncChromaMaxMarker(
       `${palette.id}:${mode}:fixed`,
       peakChromaForSteps(palette[mode].hue, keyResult, steps),
@@ -645,7 +710,7 @@ function syncChromaControls(palette, mode, keyResult, steps) {
 function refreshPreviews() {
   const steps = getSteps(state.stepCount);
   const system = generateSystem(state);
-  const { endStep, keyPalettes, customPalettes } = system;
+  const { endStep, keyPalettes, customPalettes, tokensCss } = system;
 
   for (const palette of state.customPalettes) {
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
@@ -659,11 +724,12 @@ function refreshPreviews() {
   for (const palette of state.customPalettes) {
     const results = customPalettes[palette.id];
     if (!results) continue;
-    patchPreviewRow(`custom-${palette.id}-lm`, results.lm, steps, endStep, 'hc');
-    patchPreviewRow(`custom-${palette.id}-dm`, results.dm, steps, endStep, 'hc');
+    const published = resolveIncludeSteps(palette.includeSteps, steps);
+    patchPreviewRow(`custom-${palette.id}-lm`, results.lm, published, endStep, 'hc');
+    patchPreviewRow(`custom-${palette.id}-dm`, results.dm, published, endStep, 'hc');
   }
 
-  patchTokensOutput();
+  patchTokensOutput(tokensCss);
   patchConfigOutput();
   patchThemeSurfaces();
 }
@@ -688,6 +754,10 @@ function scheduleRefreshPreviews() {
 function patchPreviewRow(previewId, paletteResult, steps, endStep, valueFormat) {
   const row = app.querySelector(`[data-preview="${previewId}"]`);
   if (!row) return;
+
+  if (row instanceof HTMLElement) {
+    row.style.setProperty('--swatch-cols', String(getSteps(state.stepCount).length + 2));
+  }
 
   const wraps = row.querySelectorAll(':scope > .swatch-wrap');
   const expectedCount = steps.length + 2;
@@ -830,6 +900,8 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textM
 }
 
 /**
+ * Playground default: interaction `bgTone` from key min (page surface).
+ * Production callers should pass the tone of whatever sits behind the color.
  * @param {string} previewId
  * @returns {{
  *   mode: 'lm' | 'dm',
@@ -842,6 +914,7 @@ function getInteractionForPreview(previewId) {
   if (previewId.startsWith('key-') || previewId.startsWith('custom-')) {
     return {
       mode,
+      // Demo underlay = step 0; engine accepts any bg hex → tone.
       getBgHex: () => state.keyPalette[mode].min,
       getStates: () => {
         if (!state.keyPalette[mode].states) {
@@ -901,6 +974,17 @@ function createUiNumberInput(opts) {
   return input;
 }
 
+/**
+ * Hug-to-content width for Steps fields (min 3 monospace chars).
+ * Uses value when set, otherwise placeholder (default key grid).
+ * @param {HTMLInputElement} input
+ */
+function syncHugInputWidth(input) {
+  const text = input.value || input.placeholder || '';
+  const len = Math.max(3, text.length);
+  input.style.width = `calc(${len}ch + 2 * var(--ui-control-px) + 2px)`;
+}
+
 function createStepCountControl() {
   const group = document.createElement('div');
   group.className = 'control-group steps-control';
@@ -917,14 +1001,95 @@ function createStepCountControl() {
     step: 1,
     ariaLabel: 'Steps',
   });
+  input.classList.remove('ui-control--number');
+  input.classList.add('ui-control--hug');
+  syncHugInputWidth(input);
+  input.addEventListener('input', () => syncHugInputWidth(input));
   input.addEventListener('change', () => {
     const value = Math.max(1, Math.round(Number(input.value)) || 1);
     input.value = String(value);
+    syncHugInputWidth(input);
     if (value === state.stepCount) return;
     state.stepCount = value;
     normalizeStateForStepCount(state);
+    reapplyBrandPerfectFitAfterStepCountChange();
     render();
   });
+  group.appendChild(input);
+  return group;
+}
+
+/**
+ * Power-user whitelist of published grid steps for a custom palette.
+ * Default (`includeSteps === null`): empty value + muted placeholder = key `stepCount`.
+ * Clear → back to default (full key grid published).
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {number[]} gridSteps
+ */
+function createIncludeStepsControl(palette, gridSteps) {
+  const group = document.createElement('div');
+  group.className = 'control-group steps-control include-steps-control';
+
+  const inputId = `include-steps-${palette.id}`;
+  const label = document.createElement('label');
+  label.htmlFor = inputId;
+  label.textContent = 'Steps';
+  group.appendChild(label);
+
+  const defaultPlaceholder = String(state.stepCount);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = inputId;
+  input.className = 'ui-control ui-control--hug';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'Published steps');
+  input.placeholder = defaultPlaceholder;
+  if (palette.includeSteps == null) {
+    input.value = '';
+  } else {
+    input.value = formatIncludeSteps(resolveIncludeSteps(palette.includeSteps, gridSteps));
+  }
+  syncHugInputWidth(input);
+
+  const commit = () => {
+    const raw = input.value.trim();
+    if (!raw) {
+      palette.includeSteps = null;
+      input.value = '';
+      input.placeholder = defaultPlaceholder;
+      syncHugInputWidth(input);
+      render();
+      return;
+    }
+
+    const next = normalizeIncludeSteps(
+      parseIncludeStepsInput(raw, gridSteps),
+      gridSteps,
+    );
+    palette.includeSteps = next;
+    if (next == null) {
+      input.value = '';
+      input.placeholder = defaultPlaceholder;
+    } else {
+      input.value = formatIncludeSteps(next);
+      if (isSingleIncludeStep(next, gridSteps)) {
+        collapseParamsForSingleIncludeStep(palette, gridSteps);
+      }
+    }
+    syncHugInputWidth(input);
+    render();
+  };
+
+  input.addEventListener('input', () => syncHugInputWidth(input));
+  input.addEventListener('change', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    }
+  });
+
   group.appendChild(input);
   return group;
 }
@@ -1016,7 +1181,98 @@ function createKeyPaletteFieldset(keyResults, steps, endStep, expandedParamGroup
     fs.appendChild(segment);
   }
 
-  return wrapPaletteFieldset(fs, KEY_PALETTE_NAME, createStepCountControl());
+  return wrapPaletteFieldset(fs, createKeyPaletteTitle(), createStepCountControl());
+}
+
+/**
+ * key-palette label + brand color controls (inline next to title).
+ */
+function createKeyPaletteTitle() {
+  const title = document.createElement('div');
+  title.className = 'key-palette-title-row';
+
+  const name = document.createElement('span');
+  name.className = 'palette-name-text';
+  name.textContent = KEY_PALETTE_NAME;
+  title.appendChild(name);
+  title.appendChild(createBrandColorControl());
+  return title;
+}
+
+/**
+ * Brand hex input + Perfect fit toggle (GUI-only link; engine applyBrandColor).
+ */
+function createBrandColorControl() {
+  const group = document.createElement('div');
+  group.className = 'control-group steps-control brand-color-control';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'ui-control ui-control--brand-hex';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = 'brand color';
+  input.setAttribute('aria-label', 'Brand color');
+  input.value = brandLink?.hex ?? '';
+
+  const commit = () => {
+    const raw = input.value.trim();
+    if (!raw) {
+      brandLink = null;
+      input.value = '';
+      return;
+    }
+    const hex = parseBrandHex(raw);
+    if (!hex) {
+      input.value = brandLink?.hex ?? '';
+      return;
+    }
+    try {
+      const result = applyBrandColor(state, hex, {
+        perfectFit: brandPerfectFit,
+        paletteId: brandLink?.paletteId,
+      });
+      brandLink = { hex: result.hex, paletteId: result.paletteId };
+      input.value = result.hex;
+      render();
+    } catch {
+      input.value = brandLink?.hex ?? '';
+    }
+  };
+
+  input.addEventListener('change', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    }
+  });
+
+  const toggleRow = document.createElement('label');
+  toggleRow.className = 'checkbox-row brand-perfect-fit';
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.checked = brandPerfectFit;
+  toggle.addEventListener('change', () => {
+    brandPerfectFit = toggle.checked;
+    if (!brandLink) return;
+    try {
+      const result = applyBrandColor(state, brandLink.hex, {
+        perfectFit: brandPerfectFit,
+        paletteId: brandLink.paletteId,
+      });
+      brandLink = { hex: result.hex, paletteId: result.paletteId };
+      render();
+    } catch {
+      /* keep link */
+    }
+  });
+  toggleRow.appendChild(toggle);
+  toggleRow.appendChild(document.createTextNode(' Perfect fit'));
+
+  group.appendChild(input);
+  group.appendChild(toggleRow);
+  return group;
 }
 
 /**
@@ -1116,11 +1372,13 @@ function createKeyPaletteControls(config, endStep, isDm) {
 
   row1.appendChild(createToneControl('start (10)', config.start.tone, (v) => {
     config.start.tone = v;
+    if (!isDm) clearBrandLink();
     scheduleRefreshPreviews();
   }));
 
   row1.appendChild(createToneControl(`end (${endStep})`, config.end.tone, (v) => {
     config.end.tone = v;
+    if (!isDm) clearBrandLink();
     scheduleRefreshPreviews();
   }));
 
@@ -1162,6 +1420,7 @@ function createKeyPaletteControls(config, endStep, isDm) {
       config.interpolator = newBezier;
     } else {
       config.interpolator = newBezier;
+      clearBrandLink();
       if (!state.keyPalette.dm.interpolatorOverride) {
         state.keyPalette.dm.interpolator = invertBezier(newBezier);
       }
@@ -1210,6 +1469,9 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
   fs.dataset.paletteId = palette.id;
 
   palette.name = sanitizePaletteName(palette.name);
+  if (palette.includeSteps === undefined) {
+    palette.includeSteps = null;
+  }
 
   const titleInput = document.createElement('input');
   titleInput.type = 'text';
@@ -1235,6 +1497,10 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
   });
 
   const tokenName = palette.name;
+  const publishedSteps = resolveIncludeSteps(palette.includeSteps, steps);
+  const singleStep = isSingleIncludeStep(palette.includeSteps, steps)
+    ? publishedSteps[0]
+    : null;
 
   for (const mode of /** @type {const} */ (['lm', 'dm'])) {
     const keyResult = keyResults[mode];
@@ -1252,7 +1518,7 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
     label.textContent = modeLabel;
     segment.appendChild(label);
 
-    const swatchRow = createSwatchRow(customResult, steps, endStep, 'hc', null, mode, {
+    const swatchRow = createSwatchRow(customResult, publishedSteps, endStep, 'hc', null, mode, {
       mode,
       getBgHex: () => state.keyPalette[mode].min,
       getStates: () => {
@@ -1275,20 +1541,56 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
       suffix,
       () => render(),
       expandedParamGroups,
+      singleStep,
     ));
 
     fs.appendChild(segment);
   }
 
+  const actions = document.createElement('div');
+  actions.className = 'palette-header-actions';
+
+  actions.appendChild(createIncludeStepsControl(palette, steps));
+
+  const index = state.customPalettes.findIndex((p) => p.id === palette.id);
+  const count = state.customPalettes.length;
+
+  if (count > 1 && index > 0) {
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'ui-btn add-palette-btn palette-header-action';
+    upBtn.textContent = '↑';
+    upBtn.setAttribute('aria-label', 'Move palette up');
+    upBtn.addEventListener('click', () => {
+      if (moveCustomPalette(state, palette.id, -1)) render();
+    });
+    actions.appendChild(upBtn);
+  }
+
+  if (count > 1 && index >= 0 && index < count - 1) {
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'ui-btn add-palette-btn palette-header-action';
+    downBtn.textContent = '↓';
+    downBtn.setAttribute('aria-label', 'Move palette down');
+    downBtn.addEventListener('click', () => {
+      if (moveCustomPalette(state, palette.id, 1)) render();
+    });
+    actions.appendChild(downBtn);
+  }
+
   const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
   removeBtn.className = 'ui-btn danger palette-header-action custom-palette-remove';
   removeBtn.textContent = 'Remove';
   removeBtn.addEventListener('click', () => {
+    if (brandLink?.paletteId === palette.id) clearBrandLink();
     state.customPalettes = state.customPalettes.filter((p) => p.id !== palette.id);
     render();
   });
+  actions.appendChild(removeBtn);
 
-  return wrapPaletteFieldset(fs, titleInput, removeBtn);
+  return wrapPaletteFieldset(fs, titleInput, actions);
 }
 
 /**
@@ -1301,10 +1603,21 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
  * @param {string} suffix
  * @param {() => void} onUpdate
  * @param {Set<string>} [expandedParamGroups]
+ * @param {number | null} [singlePublishedStep]
  */
-function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName, suffix, onUpdate, expandedParamGroups = new Set()) {
-  applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResult, steps);
-  clampChromaParamValues(palette[mode].chroma, palette[mode].hue, keyResult, steps);
+function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName, suffix, onUpdate, expandedParamGroups = new Set(), singlePublishedStep = null) {
+  if (singlePublishedStep != null) {
+    applyRelativeFixedChromaAtStep(
+      palette[mode].chroma,
+      palette[mode].hue,
+      keyResult,
+      steps,
+      singlePublishedStep,
+    );
+  } else {
+    applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResult, steps);
+    clampChromaParamValues(palette[mode].chroma, palette[mode].hue, keyResult, steps);
+  }
 
   const group = document.createElement('div');
   const groupKey = `${palette.id}:${mode}`;
@@ -1340,6 +1653,13 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
     mode,
     keyResult,
     steps,
+    singlePublishedStep,
+  };
+
+  const onParamTouch = () => {
+    if (brandLink && palette.id === brandLink.paletteId && mode === 'lm') {
+      clearBrandLink();
+    }
   };
 
   for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
@@ -1355,6 +1675,8 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
       onUpdate,
       `${suffix}-${paramName}-interpolator`,
       paramName === 'chroma' ? chromaCtx : null,
+      singlePublishedStep,
+      onParamTouch,
     ));
   }
 
@@ -1371,9 +1693,11 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
  * @param {number} max
  * @param {() => void} onUpdate
  * @param {string} nameSuffix
- * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[] } | null} [chromaCtx]
+ * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[], singlePublishedStep?: number | null } | null} [chromaCtx]
+ * @param {number | null} [singlePublishedStep]
+ * @param {(() => void) | null} [onParamTouch]
  */
-function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null) {
+function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null, singlePublishedStep = null, onParamTouch = null) {
   const section = document.createElement('div');
   section.className = 'param-section';
 
@@ -1385,58 +1709,90 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
   title.textContent = label;
   header.appendChild(title);
 
-  const toggleRow = document.createElement('label');
-  toggleRow.className = 'checkbox-row';
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.checked = param.mode === 'interpolate';
-  toggle.addEventListener('change', () => {
-    if (toggle.checked) {
-      const val = param.mode === 'fixed' ? param.value : 0;
-      Object.assign(param, createInterpolateParam(10, val, endStep, val));
-      if (chromaCtx) {
-        const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
-        applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
-        clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+  const forceSingle = singlePublishedStep != null;
+  const touch = () => onParamTouch?.();
+
+  if (!forceSingle) {
+    const toggleRow = document.createElement('label');
+    toggleRow.className = 'checkbox-row';
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.checked = param.mode === 'interpolate';
+    toggle.addEventListener('change', () => {
+      touch();
+      if (toggle.checked) {
+        const val = param.mode === 'fixed' ? param.value : 0;
+        Object.assign(param, createInterpolateParam(10, val, endStep, val));
+        if (chromaCtx) {
+          const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
+          applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+        }
+        const group = section.closest('.param-settings-group');
+        if (group) {
+          group.classList.remove('is-collapsed');
+          group.querySelector('.param-settings-toggle')?.setAttribute('aria-expanded', 'true');
+        }
+      } else {
+        const val = param.mode === 'interpolate'
+          ? param.points[0]?.value ?? 0
+          : param.value;
+        Object.assign(param, createFixedParam(val));
+        if (chromaCtx) {
+          const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
+          clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+        }
       }
-      const group = section.closest('.param-settings-group');
-      if (group) {
-        group.classList.remove('is-collapsed');
-        group.querySelector('.param-settings-toggle')?.setAttribute('aria-expanded', 'true');
-      }
-    } else {
-      const val = param.mode === 'interpolate'
-        ? param.points[0]?.value ?? 0
-        : param.value;
-      Object.assign(param, createFixedParam(val));
-      if (chromaCtx) {
-        const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
-        clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
-      }
-    }
-    onUpdate();
-  });
-  toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Interpolate'));
-  header.appendChild(toggleRow);
+      onUpdate();
+    });
+    toggleRow.appendChild(toggle);
+    toggleRow.appendChild(document.createTextNode(' Interpolate'));
+    header.appendChild(toggleRow);
+  }
+
   section.appendChild(header);
 
-  if (param.mode === 'fixed') {
+  if (forceSingle) {
+    if (param.mode !== 'fixed') {
+      const val = param.mode === 'interpolate' ? (param.points[0]?.value ?? 0) : 0;
+      Object.assign(param, createFixedParam(val));
+      delete /** @type {Record<string, unknown>} */ (param).points;
+      delete /** @type {Record<string, unknown>} */ (param).interpolators;
+    }
+    if (chromaCtx && singlePublishedStep != null) {
+      section.appendChild(createChromaSingleStepSlider(
+        param,
+        chromaCtx.palette,
+        chromaCtx.mode,
+        singlePublishedStep,
+        max,
+        touch,
+      ));
+    } else {
+      section.appendChild(createSliderControl('Value', param.value, 0, max, (v) => {
+        touch();
+        param.value = v;
+        scheduleRefreshPreviews();
+      }));
+    }
+  } else if (param.mode === 'fixed') {
     if (chromaCtx) {
       section.appendChild(createChromaFixedSlider(
         param,
         chromaCtx.palette,
         chromaCtx.mode,
         max,
+        touch,
       ));
     } else {
       section.appendChild(createSliderControl('Value', param.value, 0, max, (v) => {
+        touch();
         param.value = v;
         scheduleRefreshPreviews();
       }));
     }
   } else {
-    section.appendChild(createInterpControls(param, steps, endStep, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx));
+    section.appendChild(createInterpControls(param, steps, endStep, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx, touch));
   }
 
   return section;
@@ -1451,9 +1807,11 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
  * @param {() => void} onUpdate
  * @param {string} nameSuffix
  * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[] } | null} [chromaCtx]
+ * @param {(() => void) | null} [onParamTouch]
  */
-function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix, chromaCtx = null) {
+function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix, chromaCtx = null, onParamTouch = null) {
   const container = document.createElement('div');
+  const touch = () => onParamTouch?.();
 
   const pointsWrap = document.createElement('div');
   pointsWrap.className = 'interp-points';
@@ -1471,6 +1829,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
     fields.className = 'interp-point-fields';
 
     fields.appendChild(createStepSelect('Step', point.step, steps, isEndpoint, (step) => {
+      touch();
       point.step = step;
       if (chromaCtx) {
         const limit = liveChromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, point.step);
@@ -1491,9 +1850,11 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
         chromaCtx.mode,
         i,
         max,
+        touch,
       ));
     } else {
       fields.appendChild(createSliderControl('Value', point.value, 0, max, (v) => {
+        touch();
         point.value = v;
         scheduleRefreshPreviews();
       }));
@@ -1511,6 +1872,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
       removeBtn.textContent = '×';
       removeBtn.setAttribute('aria-label', 'Remove point');
       removeBtn.addEventListener('click', () => {
+        touch();
         param.points.splice(i, 1);
         param.interpolators.splice(i - 1, 1);
         onUpdate();
@@ -1545,6 +1907,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
       }
 
       seg.appendChild(createBezierInputs(param.interpolators[i], (bez) => {
+        touch();
         param.interpolators[i] = bez;
         scheduleRefreshPreviews();
       }));
@@ -1563,6 +1926,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
   addBtn.className = 'palette-header-action';
   addBtn.textContent = '+ Add point';
   addBtn.addEventListener('click', () => {
+    touch();
     const usedSteps = new Set(param.points.map((p) => p.step));
     const available = steps.filter((s) => !usedSteps.has(s));
     if (available.length === 0) return;
@@ -1624,6 +1988,8 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
   const row = document.createElement('div');
   row.className = 'swatch-row';
   row.dataset.textMode = textMode;
+  // Always size cells like the key palette grid (whitelist may show fewer swatches).
+  row.style.setProperty('--swatch-cols', String(getSteps(state.stepCount).length + 2));
 
   const total = steps.length + 2;
   let index = 0;
@@ -2430,10 +2796,12 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
  * @param {number} uiMax
+ * @param {(() => void) | null} [onTouch]
  */
-function createChromaFixedSlider(param, palette, mode, uiMax) {
+function createChromaFixedSlider(param, palette, mode, uiMax, onTouch = null) {
   const controlKey = `${palette.id}:${mode}:fixed`;
   return createSliderControl('Value', param.value, 0, uiMax, (v) => {
+    onTouch?.();
     param.value = v;
     scheduleRefreshPreviews();
   }, {
@@ -2445,19 +2813,49 @@ function createChromaFixedSlider(param, palette, mode, uiMax) {
 }
 
 /**
+ * Single published step: chroma behaves like an interpolate point (relative % + hard clamp).
+ * @param {import('../src/color-engine.js').ParamConfig} param
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number} step
+ * @param {number} uiMax
+ * @param {(() => void) | null} [onTouch]
+ */
+function createChromaSingleStepSlider(param, palette, mode, step, uiMax, onTouch = null) {
+  if (param.mode !== 'fixed') return createChromaFixedSlider(param, palette, mode, uiMax, onTouch);
+
+  const controlKey = `${palette.id}:${mode}:single:${step}`;
+  const limit = liveChromaLimitAtStep(palette, mode, step);
+  lockChromaPointRatio(param, Math.min(param.value, limit), limit);
+
+  return createSliderControl('Value', param.value, 0, uiMax, (v) => {
+    onTouch?.();
+    lockChromaPointRatio(param, v, liveChromaLimitAtStep(palette, mode, step));
+    scheduleRefreshPreviews();
+  }, {
+    controlKey,
+    markerKey: controlKey,
+    getMarkerMax: () => liveChromaLimitAtStep(palette, mode, step),
+    hardClampToMarker: true,
+  });
+}
+
+/**
  * Interpolate chroma point: marker is hard ceiling; engine stores relative % of gamut.
  * @param {{ step: number, value: number, ratio?: number, gamutLimit?: number }} point
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
  * @param {number} pointIndex
  * @param {number} uiMax
+ * @param {(() => void) | null} [onTouch]
  */
-function createChromaPointSlider(point, palette, mode, pointIndex, uiMax) {
+function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null) {
   const controlKey = `${palette.id}:${mode}:point:${pointIndex}`;
   const limit = liveChromaLimitAtStep(palette, mode, point.step);
   lockChromaPointRatio(point, Math.min(point.value, limit), limit);
 
   return createSliderControl('Value', point.value, 0, uiMax, (v) => {
+    onTouch?.();
     lockChromaPointRatio(point, v, liveChromaLimitAtStep(palette, mode, point.step));
     scheduleRefreshPreviews();
   }, {

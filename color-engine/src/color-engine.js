@@ -16,17 +16,26 @@ import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.m
  * `gamutLimit` is runtime-only (last limit used) — not written to config JSON.
  * @typedef {{ step: number, value: number, ratio?: number, gamutLimit?: number }} ParamPoint
  */
-/** @typedef {{ mode: 'fixed', value: number } | { mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[] }} ParamConfig */
+/**
+ * Fixed param. For chroma with a single published step, `ratio` / `gamutLimit` mirror interpolate points (runtime).
+ * @typedef {{ mode: 'fixed', value: number, ratio?: number, gamutLimit?: number }} FixedParam
+ */
+/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[] }} InterpolateParam */
+/** @typedef {FixedParam | InterpolateParam} ParamConfig */
 /**
  * Interaction state deltas (live math; not emitted as CSS tokens).
- * `deltaMin`/`deltaMax` — |ΔT| when swatch tone is near / far from background (step 0) tone.
+ * `deltaMin`/`deltaMax` — |ΔT| when swatch tone is near / far from `bgTone` (surface behind the color).
  * `state2Scale` — multiplier for state2 vs state1 (GUI: pressed vs hover).
  * `relativeChroma` — keep C as % of HCT gamut when tone shifts (default true).
  * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number, relativeChroma: boolean }} InteractionStatesConfig
  */
 /** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig, interpolatorOverride?: boolean }} KeyPaletteConfig */
 /** @typedef {{ lm: KeyPaletteConfig, dm: KeyPaletteConfig & { interpolatorOverride: boolean } }} KeyPaletteState */
-/** @typedef {{ name: string, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig } }} CustomPaletteConfig */
+/**
+ * Custom palette. `includeSteps` — whitelist of grid step ids to publish (tokens + GUI).
+ * `null` / omitted / full grid = all key steps. Never includes min/max.
+ * @typedef {{ name: string, includeSteps: number[] | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig } }} CustomPaletteConfig
+ */
 /** @typedef {{ stepCount: number, keyPalette: KeyPaletteState, customPalettes: Array<CustomPaletteConfig & { id: string }> }} EngineState */
 
 // ---------------------------------------------------------------------------
@@ -45,7 +54,7 @@ export const KEY_PALETTE_NAME = 'key-palette';
 /** Engine ceiling for chroma (Material Web HCT picker range). */
 export const CHROMA_MAX = 150;
 
-/** Default |ΔT| when swatch tone equals background tone (step 0). */
+/** Default |ΔT| when swatch tone equals `bgTone` (surface behind the color). */
 export const DEFAULT_STATE_DELTA_MIN = 5;
 
 /** Default |ΔT| when |swatchTone − bgTone| is 100. */
@@ -77,6 +86,133 @@ export function getSteps(stepCount) {
  */
 export function getEndStep(stepCount) {
   return stepCount * 10;
+}
+
+/**
+ * Format step ids as `10-20-30` (GUI / power-user string).
+ * @param {number[]} steps
+ * @returns {string}
+ */
+export function formatIncludeSteps(steps) {
+  return steps.join('-');
+}
+
+/**
+ * Parse `10-20-30` / `10, 20, 30` into unique sorted ids that exist on the key grid.
+ * Invalid / empty → full grid (same as “publish all”).
+ * @param {string} raw
+ * @param {number[]} gridSteps
+ * @returns {number[]}
+ */
+export function parseIncludeStepsInput(raw, gridSteps) {
+  const parts = String(raw ?? '')
+    .split(/[-,\s]+/)
+    .map((p) => Number(String(p).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return resolveIncludeSteps(parts, gridSteps);
+}
+
+/**
+ * Effective published steps for a custom palette (never empty; never min/max).
+ * @param {number[] | null | undefined} includeSteps
+ * @param {number[]} gridSteps
+ * @returns {number[]}
+ */
+export function resolveIncludeSteps(includeSteps, gridSteps) {
+  if (!includeSteps || includeSteps.length === 0) return gridSteps.slice();
+  const allowed = new Set(gridSteps);
+  const out = [...new Set(includeSteps.filter((s) => allowed.has(s)))].sort((a, b) => a - b);
+  return out.length ? out : gridSteps.slice();
+}
+
+/**
+ * @param {number[] | null | undefined} includeSteps
+ * @param {number[]} gridSteps
+ * @returns {boolean}
+ */
+export function isFullIncludeSteps(includeSteps, gridSteps) {
+  const resolved = resolveIncludeSteps(includeSteps, gridSteps);
+  if (resolved.length !== gridSteps.length) return false;
+  return resolved.every((s, i) => s === gridSteps[i]);
+}
+
+/**
+ * Normalize stored whitelist: `null` when publishing the full key grid.
+ * @param {number[] | null | undefined} includeSteps
+ * @param {number[]} gridSteps
+ * @returns {number[] | null}
+ */
+export function normalizeIncludeSteps(includeSteps, gridSteps) {
+  if (includeSteps == null || includeSteps.length === 0) return null;
+  const resolved = resolveIncludeSteps(includeSteps, gridSteps);
+  return isFullIncludeSteps(resolved, gridSteps) ? null : resolved;
+}
+
+/**
+ * @param {number[] | null | undefined} includeSteps
+ * @param {number[]} gridSteps
+ * @returns {boolean}
+ */
+export function isSingleIncludeStep(includeSteps, gridSteps) {
+  return resolveIncludeSteps(includeSteps, gridSteps).length === 1;
+}
+
+/**
+ * When only one step is published, collapse H/C interpolate → fixed at that step
+ * (Fixed vs Interpolate is meaningless for a single color).
+ * Chroma keeps `ratio` when the source interpolate point had one.
+ * @param {CustomPaletteConfig} palette
+ * @param {number[]} gridSteps
+ */
+export function collapseParamsForSingleIncludeStep(palette, gridSteps) {
+  const published = resolveIncludeSteps(palette.includeSteps, gridSteps);
+  if (published.length !== 1) return;
+  const step = published[0];
+  for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+    for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
+      const param = palette[mode][paramName];
+      if (param.mode !== 'interpolate') continue;
+      const value = resolveParam(param, step, gridSteps);
+      /** @type {FixedParam} */
+      const fixed = createFixedParam(value);
+      if (paramName === 'chroma') {
+        const atStep = param.points.find((p) => p.step === step);
+        if (atStep && typeof atStep.ratio === 'number' && Number.isFinite(atStep.ratio)) {
+          fixed.ratio = Math.min(1, Math.max(0, atStep.ratio));
+        }
+      }
+      palette[mode][paramName] = fixed;
+    }
+  }
+}
+
+/**
+ * Remap fixed chroma so `ratio` stays stable at one published step (same as interpolate points).
+ * Mutates the fixed param in place.
+ * @param {ParamConfig} chromaParam
+ * @param {ParamConfig} hueParam
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {number} step
+ */
+export function applyRelativeFixedChromaAtStep(chromaParam, hueParam, keyResult, steps, step) {
+  if (chromaParam.mode !== 'fixed') return;
+
+  const limit = chromaLimitAtStep(hueParam, keyResult, steps, step);
+
+  if (typeof chromaParam.ratio !== 'number' || !Number.isFinite(chromaParam.ratio)) {
+    chromaParam.ratio = chromaRatioFromValue(chromaParam.value, limit);
+  } else if (
+    typeof chromaParam.gamutLimit === 'number'
+    && chromaParam.gamutLimit > 0
+    && Math.round(Number(chromaParam.value)) !== Math.round(chromaParam.ratio * chromaParam.gamutLimit)
+  ) {
+    chromaParam.ratio = chromaRatioFromValue(chromaParam.value, limit);
+  }
+
+  chromaParam.ratio = Math.min(1, Math.max(0, chromaParam.ratio));
+  chromaParam.value = Math.round(chromaParam.ratio * limit);
+  chromaParam.gamutLimit = limit;
 }
 
 /**
@@ -183,6 +319,161 @@ export function interpolateAcrossSteps(steps, startVal, endVal, bezier) {
     result[steps[i]] = interpolateValue(startVal, endVal, t, bezier);
   }
   return result;
+}
+
+/**
+ * Nudge a cubic-bezier so `interpolateValue(start, end, tTarget, bezier) === targetTone`,
+ * staying as close as possible to the original handles (shape / trend first).
+ * @param {Bezier} bezier
+ * @param {number} tTarget — 0…1 position on the step grid
+ * @param {number} startTone
+ * @param {number} endTone
+ * @param {number} targetTone
+ * @returns {Bezier}
+ */
+export function fitBezierForTone(bezier, tTarget, startTone, endTone, targetTone) {
+  const orig = roundBezier(bezier);
+  const t = Math.min(1, Math.max(0, Number(tTarget) || 0));
+  const start = Number(startTone);
+  const end = Number(endTone);
+  const want = Math.round(Number(targetTone));
+
+  const toneAt = (b) => interpolateValue(start, end, t, b);
+  const drift = (b) => b.reduce((s, v, i) => s + (v - orig[i]) ** 2, 0);
+
+  let cur = [...orig];
+  let best = [...orig];
+  let bestErr = Math.abs(toneAt(cur) - want);
+  let bestDrift = 0;
+
+  if (bestErr === 0) return best;
+
+  for (let iter = 0; iter < 500; iter++) {
+    const step = iter < 120 ? 0.05 : iter < 300 ? 0.02 : 0.005;
+    let improved = false;
+    for (let i = 0; i < 4; i++) {
+      for (const dir of /** @type {const} */ ([-1, 1])) {
+        const next = /** @type {Bezier} */ ([...cur]);
+        next[i] = Math.min(1, Math.max(0, next[i] + dir * step));
+        const candidate = roundBezier(next);
+        const err = Math.abs(toneAt(candidate) - want);
+        const d = drift(candidate);
+        if (err < bestErr || (err === bestErr && d < bestDrift - 1e-12)) {
+          best = candidate;
+          bestErr = err;
+          bestDrift = d;
+          cur = candidate;
+          improved = true;
+        }
+      }
+    }
+    if (bestErr === 0) break;
+    if (!improved && iter > 50) break;
+  }
+
+  return best;
+}
+
+/**
+ * Step id whose current key tone is closest to `tone`.
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {number} tone
+ * @returns {number}
+ */
+export function nearestStepForTone(keyResult, steps, tone) {
+  let bestStep = steps[0];
+  let bestDist = Infinity;
+  const target = Number(tone);
+  for (const step of steps) {
+    const dist = Math.abs((keyResult.steps[step]?.tone ?? 0) - target);
+    if (dist < bestDist || (dist === bestDist && step < bestStep)) {
+      bestDist = dist;
+      bestStep = step;
+    }
+  }
+  return bestStep;
+}
+
+/**
+ * Normalize a brand hex string to `#rrggbb`, or `null` if invalid.
+ * @param {string} raw
+ * @returns {string | null}
+ */
+export function parseBrandHex(raw) {
+  const s = String(raw ?? '').trim();
+  const match = s.match(/^#?([0-9a-fA-F]{6})$/);
+  if (!match) return null;
+  return `#${match[1].toLowerCase()}`;
+}
+
+/**
+ * Apply a brand color to engine state (headless + GUI).
+ * - Picks the key step whose tone is nearest to the brand tone.
+ * - `perfectFit`: bend LM key tone interpolator (minimal drift from current curve) so that step gets brand T.
+ * - Sets brand custom palette LM hue/chroma to brand H/C. DM params untouched.
+ * Brand hex is not stored in config — caller keeps any UI “linked” state.
+ *
+ * @param {EngineState} state
+ * @param {string} hex — `#rrggbb` or `rrggbb`
+ * @param {{ perfectFit?: boolean, paletteId?: string }} [options]
+ * @returns {{ hex: string, step: number, paletteId: string, hue: number, chroma: number, tone: number }}
+ */
+export function applyBrandColor(state, hex, options = {}) {
+  const normalized = parseBrandHex(hex);
+  if (!normalized) {
+    throw new Error('Brand color must be a hex color (#rrggbb)');
+  }
+
+  const perfectFit = Boolean(options.perfectFit);
+  const hct = hexToHct(normalized);
+  const steps = getSteps(state.stepCount);
+  if (steps.length === 0) {
+    throw new Error('stepCount must be at least 1');
+  }
+
+  const keyResult = generateKeyPalette(state.keyPalette.lm, steps);
+  const step = nearestStepForTone(keyResult, steps, hct.tone);
+  const stepIndex = steps.indexOf(step);
+  const tTarget = steps.length <= 1 ? 0 : stepIndex / (steps.length - 1);
+
+  if (perfectFit) {
+    const start = state.keyPalette.lm.start.tone;
+    const end = state.keyPalette.lm.end.tone;
+    state.keyPalette.lm.interpolator = fitBezierForTone(
+      state.keyPalette.lm.interpolator,
+      tTarget,
+      start,
+      end,
+      hct.tone,
+    );
+    if (!state.keyPalette.dm.interpolatorOverride) {
+      state.keyPalette.dm.interpolator = invertBezier(state.keyPalette.lm.interpolator);
+    }
+  }
+
+  if (!state.customPalettes.length) {
+    state.customPalettes.push(createCustomPalette('brand'));
+  }
+
+  let palette = options.paletteId
+    ? state.customPalettes.find((p) => p.id === options.paletteId)
+    : null;
+  if (!palette) {
+    palette = state.customPalettes[0];
+  }
+
+  palette.lm.hue = createFixedParam(hct.hue);
+  palette.lm.chroma = createFixedParam(hct.chroma);
+
+  return {
+    hex: normalized,
+    step,
+    paletteId: palette.id,
+    hue: hct.hue,
+    chroma: hct.chroma,
+    tone: hct.tone,
+  };
 }
 
 /**
@@ -332,10 +623,10 @@ export function createDefaultInteractionStates() {
 }
 
 /**
- * |ΔT| from proximity of swatch tone to background tone (step 0).
+ * |ΔT| from proximity of swatch tone to `bgTone` (tone of the surface behind the color).
  * Closer to bg → nearer `deltaMin`; farther → nearer `deltaMax`.
  * @param {number} colorTone
- * @param {number} bgTone — HCT tone of key min (step 0)
+ * @param {number} bgTone — HCT tone behind the color (often key min / step 0, but any underlay)
  * @param {InteractionStatesConfig} states
  * @returns {number}
  */
@@ -349,7 +640,7 @@ export function interactionDeltaMagnitude(colorTone, bgTone, states) {
 /**
  * Tone after interaction state1 (scale 1) or state2 (`state2Scale`).
  * @param {number} colorTone
- * @param {number} bgTone
+ * @param {number} bgTone — tone of the surface behind the color
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
  * @returns {number}
@@ -366,7 +657,7 @@ export function applyInteractionTone(colorTone, bgTone, states, level) {
  * Live interaction color for a palette step (not min/max).
  * Keeps H; shifts T. Chroma: relative % of gamut when `states.relativeChroma` (default), else absolute C + clamp.
  * @param {{ hue: number, chroma: number, tone: number }} color
- * @param {number} bgTone — tone of background (key min / step 0)
+ * @param {number} bgTone — HCT tone of the surface behind the color (contrast „bg“; often key min / step 0, but any underlay)
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
  * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
@@ -473,6 +764,21 @@ export function applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps
  */
 export function applyRelativeCustomChroma(customPalettes, keyResults, steps) {
   for (const palette of customPalettes) {
+    const published = resolveIncludeSteps(palette.includeSteps, steps);
+    if (published.length === 1) {
+      collapseParamsForSingleIncludeStep(palette, steps);
+      const step = published[0];
+      for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+        applyRelativeFixedChromaAtStep(
+          palette[mode].chroma,
+          palette[mode].hue,
+          keyResults[mode],
+          steps,
+          step,
+        );
+      }
+      continue;
+    }
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
       applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResults[mode], steps);
     }
@@ -678,6 +984,8 @@ export function normalizeStateForStepCount(state) {
   const steps = getSteps(state.stepCount);
 
   for (const palette of state.customPalettes) {
+    palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
+
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
       for (const param of /** @type {const} */ (['hue', 'chroma'])) {
         const cfg = palette[mode][param];
@@ -756,6 +1064,7 @@ export function createCustomPalette(name = 'palette-1') {
   return {
     id: `palette-${nextId++}`,
     name: sanitizePaletteName(name),
+    includeSteps: null,
     lm: {
       hue: createFixedParam(210),
       chroma: createFixedParam(48),
@@ -765,6 +1074,24 @@ export function createCustomPalette(name = 'palette-1') {
       chroma: createFixedParam(36),
     },
   };
+}
+
+/**
+ * Reorder a custom palette in `state.customPalettes` by runtime id.
+ * @param {EngineState} state
+ * @param {string} paletteId
+ * @param {-1 | 1} delta — -1 = up, +1 = down
+ * @returns {boolean} whether order changed
+ */
+export function moveCustomPalette(state, paletteId, delta) {
+  const list = state.customPalettes;
+  const index = list.findIndex((p) => p.id === paletteId);
+  if (index < 0) return false;
+  const next = index + delta;
+  if (next < 0 || next >= list.length) return false;
+  const [item] = list.splice(index, 1);
+  list.splice(next, 0, item);
+  return true;
 }
 
 /**
@@ -837,7 +1164,12 @@ function parseParamConfig(value) {
     if (typeof value.value !== 'number' || !Number.isFinite(value.value)) {
       throw new Error('Fixed parameter requires a numeric value');
     }
-    return createFixedParam(value.value);
+    /** @type {FixedParam} */
+    const fixed = createFixedParam(value.value);
+    if (typeof value.ratio === 'number' && Number.isFinite(value.ratio)) {
+      fixed.ratio = Math.min(1, Math.max(0, value.ratio));
+    }
+    return fixed;
   }
 
   if (value.mode === 'interpolate') {
@@ -935,17 +1267,26 @@ function parseKeyPaletteMode(value, label) {
 
 /**
  * Clamp chroma for config import/export (mutates chromaParam).
- * Fixed → peak across steps; interpolate → relative remap then per-step HCT limit.
- * Live GUI state must not use this for fixed (slider may sit past the peak).
+ * Fixed → peak across steps (or single published step → relative like interpolate);
+ * interpolate → relative remap then per-step HCT limit.
+ * Live GUI state must not use this for multi-step fixed (slider may sit past the peak).
  * @param {ParamConfig} chromaParam
  * @param {ParamConfig} hueParam
  * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
+ * @param {number[]} [publishedSteps]
  */
-function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps) {
+function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publishedSteps = steps) {
   if (chromaParam.mode === 'fixed') {
+    if (publishedSteps.length === 1) {
+      applyRelativeFixedChromaAtStep(chromaParam, hueParam, keyResult, steps, publishedSteps[0]);
+      delete chromaParam.gamutLimit;
+      return;
+    }
     const peak = peakChromaForSteps(hueParam, keyResult, steps);
     chromaParam.value = Math.min(Math.max(0, Math.round(Number(chromaParam.value)) || 0), peak);
+    delete chromaParam.ratio;
+    delete chromaParam.gamutLimit;
     return;
   }
   applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps);
@@ -960,16 +1301,18 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps) {
  * @param {{ hue: ParamConfig, chroma: ParamConfig }} modeParams
  * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
+ * @param {number[]} publishedSteps
  */
-function cloneModeParamsForConfig(modeParams, keyResult, steps) {
+function cloneModeParamsForConfig(modeParams, keyResult, steps, publishedSteps) {
   const cloned = JSON.parse(JSON.stringify(modeParams));
-  clampChromaParamForConfig(cloned.chroma, cloned.hue, keyResult, steps);
+  clampChromaParamForConfig(cloned.chroma, cloned.hue, keyResult, steps, publishedSteps);
   return cloned;
 }
 
 /**
  * Serialize engine state to JSON config.
  * Export copy clamps fixed chroma to peak; interpolate keeps ratio + absolute value at current gamut.
+ * Single published step: fixed chroma exports with `ratio` (relative).
  * @param {EngineState} state
  */
 export function exportEngineConfig(state) {
@@ -980,11 +1323,18 @@ export function exportEngineConfig(state) {
     version: ENGINE_CONFIG_VERSION,
     stepCount: state.stepCount,
     keyPalette: JSON.parse(JSON.stringify(state.keyPalette)),
-    customPalettes: state.customPalettes.map(({ name, lm, dm }) => ({
-      name: sanitizePaletteName(name),
-      lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps),
-      dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps),
-    })),
+    customPalettes: state.customPalettes.map(({ name, includeSteps, lm, dm }) => {
+      const published = resolveIncludeSteps(includeSteps, steps);
+      const normalized = normalizeIncludeSteps(includeSteps, steps);
+      /** @type {{ name: string, includeSteps?: number[], lm: unknown, dm: unknown }} */
+      const out = {
+        name: sanitizePaletteName(name),
+        lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps, published),
+        dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps, published),
+      };
+      if (normalized) out.includeSteps = normalized;
+      return out;
+    }),
   };
 }
 
@@ -1029,6 +1379,7 @@ export function importEngineConfig(data) {
     return {
       id: `palette-${nextId++}`,
       name: sanitizePaletteName(typeof palette.name === 'string' ? palette.name : 'palette'),
+      includeSteps: Array.isArray(palette.includeSteps) ? palette.includeSteps : null,
       lm: {
         hue: parseParamConfig(palette.lm?.hue),
         chroma: parseParamConfig(palette.lm?.chroma),
@@ -1049,8 +1400,13 @@ export function importEngineConfig(data) {
   const steps = getSteps(state.stepCount);
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
   for (const palette of state.customPalettes) {
+    palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
+    const published = resolveIncludeSteps(palette.includeSteps, steps);
+    if (published.length === 1) {
+      collapseParamsForSingleIncludeStep(palette, steps);
+    }
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
-      clampChromaParamForConfig(palette[mode].chroma, palette[mode].hue, keyPalettes[mode], steps);
+      clampChromaParamForConfig(palette[mode].chroma, palette[mode].hue, keyPalettes[mode], steps, published);
     }
   }
 
@@ -1080,7 +1436,7 @@ function appendParamInterpolatorTokens(param, prefix, paramName, lines) {
 
 /**
  * @param {object} result
- * @param {number[]} steps
+ * @param {number[]} steps — published grid steps (min/max always emitted separately)
  * @param {number} endStep
  * @param {string} prefix
  * @param {string[]} lines
@@ -1090,6 +1446,7 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
   lines.push(`  --${prefix}-0: ${result.min};`);
   for (const step of steps) {
     const data = result.steps[step];
+    if (!data) continue;
     if (format === 'tone') {
       lines.push(`  --${prefix}-${step}: ${data.hex}; /* T: ${data.tone} */`);
     } else {
@@ -1102,6 +1459,7 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
 /**
  * Build `:root { … }` CSS custom properties from engine state + already-generated palettes.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
+ * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
  * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
@@ -1130,11 +1488,12 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
     const results = customResults[palette.id];
     if (!results) continue;
 
-    appendPaletteColorTokens(results.lm, steps, endStep, name, lines, 'hc');
+    const published = resolveIncludeSteps(palette.includeSteps, steps);
+    appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
     appendParamInterpolatorTokens(palette.lm.hue, name, 'hue', lines);
     appendParamInterpolatorTokens(palette.lm.chroma, name, 'chroma', lines);
 
-    appendPaletteColorTokens(results.dm, steps, endStep, `${name}-dm`, lines, 'hc');
+    appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
     appendParamInterpolatorTokens(palette.dm.hue, `${name}-dm`, 'hue', lines);
     appendParamInterpolatorTokens(palette.dm.chroma, `${name}-dm`, 'chroma', lines);
   }
@@ -1144,8 +1503,8 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 
 /**
  * Generate the full color system from engine state.
- * Side effect: remaps interpolate chroma points in `state` (relative gamut %), then safety-clamps.
- * Fixed chroma in live state is left as requested; per-step render still clamps.
+ * Side effect: remaps interpolate chroma (and single-include-step fixed chroma) in `state`.
+ * Multi-step fixed chroma in live state is left as requested; per-step render still clamps.
  * @param {EngineState} state
  */
 export function generateSystem(state) {

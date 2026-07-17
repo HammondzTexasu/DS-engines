@@ -56,17 +56,33 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 
 **Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
 
-**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků.
+**Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce; `min`/`max` se tímto filtrem neřeší (vždy).
+* `null` / vynecháno / celá mřížka → publikuje se vše (`10-20-…-end`)
+* např. `[40]` nebo `[20, 40, 60]` → jen tyto kroky
+* **1 published krok:** Fixed vs Interpolate nemá smysl — chroma se chová jako interpolate bod (relative % gamutu). Při 2+ krocích zůstává Fixed/Interpolate jako dřív.
+
+**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků. `includeSteps` se po změně `stepCount` znovu normalizuje proti nové mřížce.
 
 **Názvy custom palet:** jen `a–z`, `0–9`, `-` (stejný tvar v configu i v názvech CSS tokenů).
+
+## 4b. Brand color (seed)
+
+Jednorázové založení škály z konkrétní barvy (headless i GUI). **Brand hex se do configu neukládá** — výsledkem jsou upravené LM tony / H·C.
+
+* Najde key krok s tone nejbližším seed T.
+* **`perfectFit: false`:** jen nastaví LM hue + chroma u brand custom palety (podle `paletteId`, default první).
+* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T. DM zůstává default (invert LM, pokud není override).
+* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`.
+* **GUI:** při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje (nová mřížka → nový nearest step / `t`). Bez Perfect fit není potřeba — H/C brandu na `stepCount` nezávisí.
 
 ## 5. Interaction states (delta T)
 
 Live math pro stavy na **krocích palety** (ne `min`/`max`). Do CSS tokenů se **nezapisuje**.
 
-* Pozadí pro blízkost = tone barvy **`0` (`min`)** v daném LM/DM.
+* **`bgTone`** = HCT tone **povrchu za barvou** (kontrastní „bg“ vůči swatchi). Často je to krok `0` (`min`), ale může to být libovolný underlay (karta, overlay, jiný token) — engine ho jen dostane jako číslo.
 * `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default min 5, max 20).
 * Směr: T > 50 → ztmavit; jinak zesvětlit.
 * **state1** = 1× delta (GUI: hover); **state2** = delta × `state2Scale` (default 2, GUI: pressed).
 * **relativeChroma** (default zapnuto): při posunu T drží C jako % HCT gamutu (stejný princip jako u interpolate chroma); vypnuto = absolutní C + clamp.
-* Nastavení je v configu u `keyPalette.lm.states` / `keyPalette.dm.states`. Custom palety používají stejná pravidla (bg z key min).
+* Nastavení je v configu u `keyPalette.lm.states` / `keyPalette.dm.states`.
+* **Playground (`app/`):** demo předává `bgTone` z key `min` (page surface). V produkci dodá volající tone skutečného podkladu pod prvkem.
