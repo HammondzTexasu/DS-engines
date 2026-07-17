@@ -4,6 +4,8 @@ Tento projekt definuje základní pilíř design systému založený na barevné
 
 Engine prozatím **generuje config a CSS tokeny**. Jak je projekt spotřebuje, řeší jiné vrstvy.
 
+**Konfigurace:** výchozí hodnoty žijí v enginu (`createDefaultState`). Projektový soubor [`config/engine-config.json`](./config/engine-config.json) má prioritu — playground ho při startu načte; když chybí nebo selže, použije se engine default. GUI Import přepíše jen aktuální session.
+
 Vývojářské detaily (API, soubory, headless použití): viz [`src/DEV.md`](./src/DEV.md).
 
 ## 1. Architektonické principy
@@ -80,7 +82,7 @@ Jednorázové založení škály z konkrétní barvy (headless i GUI). **Brand h
 Live math pro stavy na **krocích palety** (ne `min`/`max`). Do CSS tokenů se **nezapisuje**.
 
 * **`bgTone`** = HCT tone **povrchu za barvou** (kontrastní „bg“ vůči swatchi). Často je to krok `0` (`min`), ale může to být libovolný underlay (karta, overlay, jiný token) — engine ho jen dostane jako číslo.
-* `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default min 5, max 20).
+* `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default LM min 5 / max 20; DM min 8 / max 15).
 * Směr: T > 50 → ztmavit; jinak zesvětlit.
 * **state1** = 1× delta (GUI: hover); **state2** = delta × `state2Scale` (default 2, GUI: pressed).
 * **relativeChroma** (default zapnuto): při posunu T drží C jako % HCT gamutu (stejný princip jako u interpolate chroma); vypnuto = absolutní C + clamp.

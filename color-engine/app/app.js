@@ -44,6 +44,24 @@ import {
 /** @type {ReturnType<typeof createDefaultState>} */
 let state = createDefaultState();
 
+/** Project config next to app/src — loaded at boot when present. */
+const LOCAL_CONFIG_URL = new URL('../config/engine-config.json', import.meta.url);
+
+/**
+ * Prefer `config/engine-config.json`; fall back to engine `createDefaultState()`.
+ * @returns {Promise<ReturnType<typeof createDefaultState>>}
+ */
+async function loadInitialState() {
+  try {
+    const res = await fetch(LOCAL_CONFIG_URL.href);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return importEngineConfig(await res.json());
+  } catch (err) {
+    console.warn('[color-engine] Local config not loaded, using engine default.', err);
+    return createDefaultState();
+  }
+}
+
 /** @type {{ message: string, isError: boolean } | null} */
 let pendingConfigStatus = null;
 
@@ -3333,8 +3351,13 @@ function createBezierInputs(bezier, onChange, options = {}) {
   return wrap;
 }
 
-try {
-  render();
-} catch (err) {
-  showError(err);
+async function boot() {
+  try {
+    state = await loadInitialState();
+    render();
+  } catch (err) {
+    showError(err);
+  }
 }
+
+boot();

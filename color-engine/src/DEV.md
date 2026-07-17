@@ -22,6 +22,8 @@ GUI ve složce `app/` je **volitelný playground** — není součástí headles
 ```text
 color-engine/
 ├── README.md                 # Specifikace (chování, tokeny)
+├── config/
+│   └── engine-config.json    # Projektový config (playground načte prioritně)
 ├── src/
 │   ├── color-engine.js       # Headless engine (jediný zdroj pravdy logiky)
 │   └── DEV.md                # Tento soubor
@@ -33,13 +35,12 @@ color-engine/
     └── engine-ui.css
 ```
 
-**Playground:** z kořene monorepa / projektu:
+**Priorita stavu (playground):**
+1. `config/engine-config.json` (pokud fetch OK + validní) → `importEngineConfig`
+2. jinak engine `createDefaultState()`
+3. GUI Import v session přepíše aktuální stav (nesahá na soubor)
 
-```bash
-npx serve . -l 3456
-```
-
-→ `http://localhost:3456/color-engine/app/`
+Playground bere config relativně (`../config/engine-config.json` z `app/`). Hostitel musí ten soubor doručit spolu s `app/` — jinak boot spadne na engine default.
 
 ---
 
@@ -53,7 +54,7 @@ import {
   createDefaultState,
 } from './color-engine.js';
 
-// A) z JSON configu
+// A) z JSON configu (projektový soubor, import, …)
 const state = importEngineConfig(configJson);
 const {
   tokensCss,   // string: :root { --key-palette-10: #…; … }
@@ -64,10 +65,12 @@ const {
   customPalettes, // keyed by runtime palette id
 } = generateSystem(state);
 
-// B) výchozí stav
+// B) výchozí stav enginu (když local config chybí / není validní)
 const fresh = createDefaultState();
 const system = generateSystem(fresh);
 ```
+
+**Playground** při startu zkusí načíst `../config/engine-config.json`; při chybě spadne na B.
 
 **Důležité:** `generateSystem(state)` **může změnit** interpolate chroma body přímo ve `state` (viz §6). Nejde o čistou funkci „jen výstup“.
 
@@ -132,7 +135,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `normalizeStateForStepCount(state)` | Po změně `state.stepCount` srovná interpolate body + `includeSteps` na novou mřížku. GUI: při Perfect fit pak znovu `applyBrandColor` |
 | `colorAtInteractionState(color, bgTone, states, level)` | Live state1/state2 barva (level `1` \| `2`); `bgTone` = tone povrchu za barvou |
 
-Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE2_SCALE`, `INTERACTION_TONE_PIVOT`.
+Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`, `INTERACTION_TONE_PIVOT`.
 ### 5.2 Low-level (playground / tooling)
 
 Headless pipeline je typicky nepotřebuje; `app/` je používá.

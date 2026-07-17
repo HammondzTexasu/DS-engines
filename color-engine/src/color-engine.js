@@ -60,6 +60,10 @@ export const DEFAULT_STATE_DELTA_MIN = 5;
 /** Default |ΔT| when |swatchTone − bgTone| is 100. */
 export const DEFAULT_STATE_DELTA_MAX = 20;
 
+/** DM key palette defaults (near / far from bg). */
+export const DEFAULT_STATE_DELTA_MIN_DM = 8;
+export const DEFAULT_STATE_DELTA_MAX_DM = 15;
+
 /** Default state2 magnitude = state1 × this scale. */
 export const DEFAULT_STATE2_SCALE = 2;
 
@@ -1049,7 +1053,11 @@ export function createDefaultKeyPalette() {
       end: { tone: 93 },
       interpolator: [0.32, 0.23, 0.68, 0.82],
       interpolatorOverride: false,
-      states: createDefaultInteractionStates(),
+      states: {
+        ...createDefaultInteractionStates(),
+        deltaMin: DEFAULT_STATE_DELTA_MIN_DM,
+        deltaMax: DEFAULT_STATE_DELTA_MAX_DM,
+      },
     },
   };
 }

@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "stepCount": 10,
+  "keyPalette": {
+    "lm": {
+      "min": "#ffffff",
+      "max": "#000000",
+      "start": {
+        "tone": 96
+      },
+      "end": {
+        "tone": 7
+      },
+      "interpolator": [
+        0.32,
+        0.18,
+        0.68,
+        0.77
+      ],
+      "states": {
+        "deltaMin": 5,
+        "deltaMax": 20,
+        "state2Scale": 2,
+        "relativeChroma": true
+      }
+    },
+    "dm": {
+      "min": "#000000",
+      "max": "#ffffff",
+      "start": {
+        "tone": 8
+      },
+      "end": {
+        "tone": 93
+      },
+      "interpolator": [
+        0.32,
+        0.23,
+        0.68,
+        0.82
+      ],
+      "interpolatorOverride": false,
+      "states": {
+        "deltaMin": 8,
+        "deltaMax": 15,
+        "state2Scale": 2,
+        "relativeChroma": true
+      }
+    }
+  },
+  "customPalettes": [
+    {
+      "name": "palette-1",
+      "lm": {
+        "hue": {
+          "mode": "fixed",
+          "value": 210
+        },
+        "chroma": {
+          "mode": "fixed",
+          "value": 48
+        }
+      },
+      "dm": {
+        "hue": {
+          "mode": "fixed",
+          "value": 210
+        },
+        "chroma": {
+          "mode": "fixed",
+          "value": 36
+        }
+      }
+    }
+  ]
+}
