@@ -20,12 +20,7 @@ import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.m
  * Fixed param. For chroma with a single published step, `ratio` / `gamutLimit` mirror interpolate points (runtime).
  * @typedef {{ mode: 'fixed', value: number, ratio?: number, gamutLimit?: number }} FixedParam
  */
-/**
- * Interpolate param. `clampInterpolatedChroma` applies only to chroma (ignored for hue):
- * when true (default), every step’s C is HCT-clamped; when false, only control-point steps are clamped
- * and intermediate steps keep the raw interpolated C.
- * @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean }} InterpolateParam
- */
+/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean }} InterpolateParam */
 /** @typedef {FixedParam | InterpolateParam} ParamConfig */
 /**
  * Interaction state deltas (live math; not emitted as CSS tokens).
@@ -565,6 +560,7 @@ export function peakChromaForSteps(hueParam, keyResult, steps) {
 /**
  * Clamp stored interpolate chroma point values to HCT limits. Mutates chromaParam.
  * Fixed chroma is left as requested (UI may sit past the peak marker); render still clamps per step.
+ * No-op when `clampInterpolatedChroma` is false (absolute C allowed above gamut).
  * @param {ParamConfig} chromaParam
  * @param {ParamConfig} hueParam
  * @param {ReturnType<typeof generateKeyPalette>} keyResult
@@ -573,6 +569,7 @@ export function peakChromaForSteps(hueParam, keyResult, steps) {
  */
 export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) {
   if (chromaParam.mode === 'fixed') return false;
+  if (!isClampInterpolatedChroma(chromaParam)) return false;
 
   let changed = false;
   for (const point of chromaParam.points) {
@@ -591,6 +588,16 @@ export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) 
     }
   }
   return changed;
+}
+
+/**
+ * Whether interpolate chroma should clamp control points + generated steps (default true).
+ * @param {ParamConfig} chromaParam
+ * @returns {boolean}
+ */
+export function isClampInterpolatedChroma(chromaParam) {
+  if (chromaParam.mode !== 'interpolate') return true;
+  return chromaParam.clampInterpolatedChroma !== false;
 }
 
 /**
@@ -745,6 +752,7 @@ export function lockChromaPointRatio(point, value, limit) {
  */
 export function applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps) {
   if (chromaParam.mode !== 'interpolate') return;
+  if (!isClampInterpolatedChroma(chromaParam)) return;
 
   for (const point of chromaParam.points) {
     const limit = chromaLimitAtStep(hueParam, keyResult, steps, point.step);
@@ -882,19 +890,12 @@ export function generateCustomPaletteForMode(palette, mode, keyResult, steps) {
   const cfg = palette[mode];
   /** @type {Record<number, { tone: number, hue: number, chroma: number, hex: string }>} */
   const stepColors = {};
-  const chromaParam = cfg.chroma;
-  const clampIntermediates = chromaParam.mode !== 'interpolate'
-    || chromaParam.clampInterpolatedChroma !== false;
-  const controlSteps = chromaParam.mode === 'interpolate'
-    ? new Set(chromaParam.points.map((p) => p.step))
-    : null;
 
   for (const step of steps) {
     const tone = keyResult.steps[step].tone;
     const hue = resolveParam(cfg.hue, step, steps);
-    const requested = resolveParam(chromaParam, step, steps);
-    const isControl = controlSteps ? controlSteps.has(step) : true;
-    const chroma = (clampIntermediates || isControl)
+    const requested = resolveParam(cfg.chroma, step, steps);
+    const chroma = isClampInterpolatedChroma(cfg.chroma)
       ? clampChroma(requested, hue, tone)
       : Math.max(0, Math.round(Number(requested)) || 0);
     stepColors[step] = { tone, hue, chroma, hex: hctToHex(hue, chroma, tone) };
@@ -1044,7 +1045,6 @@ export function createInterpolateParam(startStep, startVal, endStep, endVal, bez
       { step: endStep, value: endVal },
     ],
     interpolators: [[...bezier]],
-    clampInterpolatedChroma: true,
   };
 }
 
@@ -1221,8 +1221,6 @@ function parseParamConfig(value) {
     const interpolated = { mode: 'interpolate', points, interpolators };
     if (value.clampInterpolatedChroma === false) {
       interpolated.clampInterpolatedChroma = false;
-    } else {
-      interpolated.clampInterpolatedChroma = true;
     }
     return interpolated;
   }
@@ -1319,8 +1317,17 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
     delete chromaParam.gamutLimit;
     return;
   }
+  if (!isClampInterpolatedChroma(chromaParam)) {
+    chromaParam.clampInterpolatedChroma = false;
+    for (const point of chromaParam.points) {
+      delete point.gamutLimit;
+      delete point.ratio;
+    }
+    return;
+  }
   applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps);
   clampChromaParamValues(chromaParam, hueParam, keyResult, steps);
+  delete chromaParam.clampInterpolatedChroma;
   for (const point of chromaParam.points) {
     delete point.gamutLimit;
   }
@@ -1533,9 +1540,10 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 
 /**
  * Generate the full color system from engine state.
- * Side effect: remaps interpolate chroma (and single-include-step fixed chroma) in `state`.
- * Multi-step fixed chroma in live state is left as requested; per-step render still clamps.
- * Interpolate chroma intermediates clamp when `clampInterpolatedChroma` is true (default).
+ * Side effect: remaps interpolate chroma (and single-include-step fixed chroma) in `state`
+ * when clamp is on (default). With `clampInterpolatedChroma: false`, absolute C is left alone.
+ * Multi-step fixed chroma in live state is left as requested; per-step render still clamps unless
+ * interpolate chroma has clamp off.
  * @param {EngineState} state
  */
 export function generateSystem(state) {

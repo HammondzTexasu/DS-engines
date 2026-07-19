@@ -54,9 +54,7 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
     * `[nazev]-chroma-interpolator`
     * Podpora vícebodové interpolace (např. suffix `-1`, `-2` pro případ interpolace mezi více body, např. 10–50–100, tedy interpolátor mezi 10–50 a druhý mezi 50–100). Kroky `min` a `max` se do interpolace H/C nepočítají.
 
-**Chroma (interpolate):** drží se **relativní podíl** dostupného gamutu (ne absolutní C natvrdo). Při změně key / hue se absolutní C přepočte, poměr zůstane.
-
-**Clamp interpolated chroma** (default zapnuto): mezikroky mezi kontrolními body se při generování oříznou do HCT gamutu. Vypnuto → mezikroky drží raw interpolované C (kontrolní body se dál klampují; hex stejně nemůže zobrazit C mimo sRGB).
+**Chroma (interpolate):** defaultně drží **relativní podíl** dostupného gamutu a clampuje body i mezikroky. Volitelně `clampInterpolatedChroma: false` — absolutní C u kontrolních bodů i mezikroků (může být nad gamutem; hex stejně projde HCT).
 
 **Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
 

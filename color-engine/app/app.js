@@ -12,6 +12,7 @@ import {
   chromaLimitAtStep,
   lockChromaPointRatio,
   clampChroma,
+  isClampInterpolatedChroma,
   maxChromaForHueTone,
   hexToHct,
   hctToHex,
@@ -1766,25 +1767,33 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     toggleRow.appendChild(toggle);
     toggleRow.appendChild(document.createTextNode(' Interpolate'));
     header.appendChild(toggleRow);
-  }
 
-  if (!forceSingle && chromaCtx && param.mode === 'interpolate') {
-    if (typeof param.clampInterpolatedChroma !== 'boolean') {
-      param.clampInterpolatedChroma = true;
+    if (chromaCtx && param.mode === 'interpolate') {
+      const clampRow = document.createElement('label');
+      clampRow.className = 'checkbox-row';
+      const clampToggle = document.createElement('input');
+      clampToggle.type = 'checkbox';
+      clampToggle.checked = isClampInterpolatedChroma(param);
+      clampToggle.addEventListener('change', () => {
+        touch();
+        if (clampToggle.checked) {
+          delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
+          const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
+          applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+        } else {
+          param.clampInterpolatedChroma = false;
+          for (const point of param.points) {
+            delete point.ratio;
+            delete point.gamutLimit;
+          }
+        }
+        onUpdate();
+      });
+      clampRow.appendChild(clampToggle);
+      clampRow.appendChild(document.createTextNode(' Clamp interpolated chroma'));
+      header.appendChild(clampRow);
     }
-    const clampRow = document.createElement('label');
-    clampRow.className = 'checkbox-row';
-    const clampToggle = document.createElement('input');
-    clampToggle.type = 'checkbox';
-    clampToggle.checked = param.clampInterpolatedChroma !== false;
-    clampToggle.addEventListener('change', () => {
-      touch();
-      param.clampInterpolatedChroma = clampToggle.checked;
-      onUpdate();
-    });
-    clampRow.appendChild(clampToggle);
-    clampRow.appendChild(document.createTextNode(' Clamp interpolated chroma'));
-    header.appendChild(clampRow);
   }
 
   section.appendChild(header);
@@ -1870,10 +1879,13 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
       point.step = step;
       if (chromaCtx) {
         const limit = liveChromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, point.step);
-        if (typeof point.ratio === 'number' && Number.isFinite(point.ratio)) {
-          lockChromaPointRatio(point, Math.round(point.ratio * limit), limit);
-        } else {
-          lockChromaPointRatio(point, point.value, limit);
+        const clampOn = isClampInterpolatedChroma(param);
+        if (clampOn) {
+          if (typeof point.ratio === 'number' && Number.isFinite(point.ratio)) {
+            lockChromaPointRatio(point, Math.round(point.ratio * limit), limit);
+          } else {
+            lockChromaPointRatio(point, point.value, limit);
+          }
         }
       }
       param.points.sort((a, b) => a.step - b.step);
@@ -1888,6 +1900,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
         i,
         max,
         touch,
+        isClampInterpolatedChroma(param),
       ));
     } else {
       fields.appendChild(createSliderControl('Value', point.value, 0, max, (v) => {
@@ -1976,7 +1989,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
     const prev = param.points[idx - 1];
     const next = param.points[idx];
     let newVal = Math.round((prev.value + next.value) / 2);
-    if (chromaCtx) {
+    if (chromaCtx && isClampInterpolatedChroma(param)) {
       newVal = Math.min(
         newVal,
         liveChromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, newStep),
@@ -1985,7 +1998,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
 
     /** @type {{ step: number, value: number, ratio?: number, gamutLimit?: number }} */
     const newPoint = { step: newStep, value: newVal };
-    if (chromaCtx) {
+    if (chromaCtx && isClampInterpolatedChroma(param)) {
       lockChromaPointRatio(
         newPoint,
         newVal,
@@ -2878,28 +2891,38 @@ function createChromaSingleStepSlider(param, palette, mode, step, uiMax, onTouch
 }
 
 /**
- * Interpolate chroma point: marker is hard ceiling; engine stores relative % of gamut.
+ * Interpolate chroma point: with clamp on, marker is hard ceiling + relative %;
+ * with clamp off, absolute C may sit past the peak (like multi-step fixed).
  * @param {{ step: number, value: number, ratio?: number, gamutLimit?: number }} point
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
  * @param {number} pointIndex
  * @param {number} uiMax
  * @param {(() => void) | null} [onTouch]
+ * @param {boolean} [clampOn=true]
  */
-function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null) {
+function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null, clampOn = true) {
   const controlKey = `${palette.id}:${mode}:point:${pointIndex}`;
   const limit = liveChromaLimitAtStep(palette, mode, point.step);
-  lockChromaPointRatio(point, Math.min(point.value, limit), limit);
+  if (clampOn) {
+    lockChromaPointRatio(point, Math.min(point.value, limit), limit);
+  }
 
   return createSliderControl('Value', point.value, 0, uiMax, (v) => {
     onTouch?.();
-    lockChromaPointRatio(point, v, liveChromaLimitAtStep(palette, mode, point.step));
+    if (clampOn) {
+      lockChromaPointRatio(point, v, liveChromaLimitAtStep(palette, mode, point.step));
+    } else {
+      point.value = v;
+      delete point.ratio;
+      delete point.gamutLimit;
+    }
     scheduleRefreshPreviews();
   }, {
     controlKey,
     markerKey: controlKey,
     getMarkerMax: () => liveChromaLimitAtStep(palette, mode, point.step),
-    hardClampToMarker: true,
+    hardClampToMarker: clampOn,
   });
 }
 

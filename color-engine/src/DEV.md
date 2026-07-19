@@ -101,9 +101,10 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše. Jinak unikátní seřazené step id z mřížky (ne `min`/`max`). Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
 * **ParamConfig**
   * `{ "mode": "fixed", "value": number, "ratio"? }` — `ratio` u single-include-step chromy (a runtime u fixed)
-  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }` — u chromy: `clampInterpolatedChroma` (default `true`) klampuje mezikroky; `false` = raw C na mezikrocích
+  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }`  
+    * `clampInterpolatedChroma` (jen chroma; default `true`) — `false` = bez relative/clamp bodů i mezikroků
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
-  * `ratio` (0–1) = relativní chroma intent (exportováno u chroma)  
+  * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
 * **`keyPalette.lm|dm.states`** (volitelné; při importu doplní defaulty):
   * `{ "deltaMin": 5, "deltaMax": 20, "state2Scale": 2, "relativeChroma": true }`
@@ -111,7 +112,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `relativeChroma` — C jako % gamutu při změně T (default `true`)
   * `bgTone` **není** v configu — volající ho předá do `colorAtInteractionState` (tone povrchu za barvou)
 
-**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate přepočte relative + clamp; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` se exportují s key palette.
+**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s clamp on → relative + clamp; s `clampInterpolatedChroma: false` → absolutní C + flag v JSON; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` se exportují s key palette.
 
 **Import** (`importEngineConfig`): validace → nové `id` palet → normalizace `includeSteps` → clamp/relative normalizace chroma; chybějící `states` → defaulty.
 
@@ -143,7 +144,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
 * **Interaction states:** `interactionDeltaMagnitude`, `applyInteractionTone`, `colorAtInteractionState`  
   * `bgTone` — HCT tone **za** barvou (kontrastní bg). Playground používá key `min`; produkce dodá tone skutečného underlay.
-* **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
+* **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
@@ -159,20 +160,20 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 Pořadí uvnitř:
 
 1. Spočítá key palety z aktuálního `stepCount`.
-2. **`applyRelativeCustomChroma`** — u interpolate chroma přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
-3. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (a případně doladí `ratio`).
-4. Spočítá custom palety (LM/DM) na **plné** mřížce.
+2. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
+3. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (při clamp on).
+4. Spočítá custom palety (LM/DM) na **plné** mřížce (mezikroky: clamp on → `clampChroma`; clamp off → raw interpolované C).
 5. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig`.
 
 **Fixed chroma** (2+ published kroků) ve state se v tomto kroku **nemění** (může sedět nad peakem; při výpočtu barvy kroku se C stejně clampne).
 
 ### Relative chroma (interpolate / single published step)
 
-* Záměr = **`ratio`** (podíl max C na daném kroku / hue / tone).
-* **`value`** = odvozené absolutní C (`round(ratio * limit)`).
-* Explicitní edit C (GUI/kód): `lockChromaPointRatio(point|fixedParam, value, limit)`.
-* Když někdo změní jen `value` bez locku a `gamutLimit` už je nastavené, další `generateSystem` to detekuje jako edit a přepočte `ratio`.
-
+* Záměr = **`ratio`** (podíl max C na daném kroku / hue / tone) — jen když je clamp zapnutý.
+* **`value`** = odvozené absolutní C (`round(ratio * limit)`), nebo absolutní C bez clamp.
+* Explicitní edit C (GUI/kód): `lockChromaPointRatio(point|fixedParam, value, limit)` (clamp on).
+* Když někdo změní jen `value` bez locku a `gamutLimit` už je nastavené, další `generateSystem` to detekuje jako edit a přepočte `ratio` (clamp on).
+* API: `isClampInterpolatedChroma(chromaParam)`.
 ---
 
 ## 7. Změna počtu kroků (`normalizeStateForStepCount`)
