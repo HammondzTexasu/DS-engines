@@ -1768,6 +1768,25 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     header.appendChild(toggleRow);
   }
 
+  if (!forceSingle && chromaCtx && param.mode === 'interpolate') {
+    if (typeof param.clampInterpolatedChroma !== 'boolean') {
+      param.clampInterpolatedChroma = true;
+    }
+    const clampRow = document.createElement('label');
+    clampRow.className = 'checkbox-row';
+    const clampToggle = document.createElement('input');
+    clampToggle.type = 'checkbox';
+    clampToggle.checked = param.clampInterpolatedChroma !== false;
+    clampToggle.addEventListener('change', () => {
+      touch();
+      param.clampInterpolatedChroma = clampToggle.checked;
+      onUpdate();
+    });
+    clampRow.appendChild(clampToggle);
+    clampRow.appendChild(document.createTextNode(' Clamp interpolated chroma'));
+    header.appendChild(clampRow);
+  }
+
   section.appendChild(header);
 
   if (forceSingle) {

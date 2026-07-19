@@ -56,6 +56,8 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 
 **Chroma (interpolate):** drží se **relativní podíl** dostupného gamutu (ne absolutní C natvrdo). Při změně key / hue se absolutní C přepočte, poměr zůstane.
 
+**Clamp interpolated chroma** (default zapnuto): mezikroky mezi kontrolními body se při generování oříznou do HCT gamutu. Vypnuto → mezikroky drží raw interpolované C (kontrolní body se dál klampují; hex stejně nemůže zobrazit C mimo sRGB).
+
 **Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
 
 **Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce; `min`/`max` se tímto filtrem neřeší (vždy).

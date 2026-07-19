@@ -101,7 +101,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše. Jinak unikátní seřazené step id z mřížky (ne `min`/`max`). Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
 * **ParamConfig**
   * `{ "mode": "fixed", "value": number, "ratio"? }` — `ratio` u single-include-step chromy (a runtime u fixed)
-  * `{ "mode": "interpolate", "points": [...], "interpolators": [...] }`
+  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }` — u chromy: `clampInterpolatedChroma` (default `true`) klampuje mezikroky; `false` = raw C na mezikrocích
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON

@@ -628,6 +628,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
 
 .param-section-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
