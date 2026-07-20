@@ -751,6 +751,18 @@ function refreshPreviews() {
   patchTokensOutput(tokensCss);
   patchConfigOutput();
   patchThemeSurfaces();
+  syncKeyDmAutoInterpolatorField();
+}
+
+/**
+ * Disabled DM tone interpolator is built at render; keep its text in sync when LM curve changes
+ * without a full re-render (refreshPreviews only).
+ */
+function syncKeyDmAutoInterpolatorField() {
+  if (state.keyPalette.dm.interpolatorOverride) return;
+  const input = app.querySelector('[data-dm-auto-interpolator] input.ui-ghost');
+  if (!(input instanceof HTMLInputElement)) return;
+  input.value = formatBezierCss(invertBezier(state.keyPalette.lm.interpolator));
 }
 
 let previewRaf = null;
@@ -1433,7 +1445,7 @@ function createKeyPaletteControls(config, endStep, isDm) {
     ? invertBezier(state.keyPalette.lm.interpolator)
     : config.interpolator;
 
-  bezierRow.appendChild(createBezierInputs(bezier, (newBezier) => {
+  const bezierInputs = createBezierInputs(bezier, (newBezier) => {
     if (isDm) {
       config.interpolatorOverride = true;
       config.interpolator = newBezier;
@@ -1445,7 +1457,12 @@ function createKeyPaletteControls(config, endStep, isDm) {
       }
     }
     refreshPreviews();
-  }, isDm && !config.interpolatorOverride));
+  }, isDm && !config.interpolatorOverride);
+
+  if (isDm && !config.interpolatorOverride) {
+    bezierInputs.dataset.dmAutoInterpolator = '';
+  }
+  bezierRow.appendChild(bezierInputs);
 
   controls.appendChild(bezierRow);
   return controls;
