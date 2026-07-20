@@ -662,13 +662,13 @@ export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) 
 }
 
 /**
- * Whether interpolate chroma should clamp control points + generated steps (default true).
+ * Whether interpolate chroma should clamp control points + generated steps (default false).
  * @param {ParamConfig} chromaParam
  * @returns {boolean}
  */
 export function isClampInterpolatedChroma(chromaParam) {
   if (chromaParam.mode !== 'interpolate') return true;
-  return chromaParam.clampInterpolatedChroma !== false;
+  return chromaParam.clampInterpolatedChroma === true;
 }
 
 /**
@@ -1426,8 +1426,8 @@ function parseParamConfig(value) {
     const interpolators = value.interpolators.map((bezier, index) => parseBezier(bezier, `interpolator ${index + 1}`));
     /** @type {InterpolateParam} */
     const interpolated = { mode: 'interpolate', points, interpolators };
-    if (value.clampInterpolatedChroma === false) {
-      interpolated.clampInterpolatedChroma = false;
+    if (value.clampInterpolatedChroma === true) {
+      interpolated.clampInterpolatedChroma = true;
     }
     return interpolated;
   }
@@ -1540,7 +1540,7 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
     return;
   }
   if (!isClampInterpolatedChroma(chromaParam)) {
-    chromaParam.clampInterpolatedChroma = false;
+    delete chromaParam.clampInterpolatedChroma;
     for (const point of chromaParam.points) {
       delete point.gamutLimit;
       delete point.ratio;
@@ -1549,7 +1549,7 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
   }
   applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps);
   clampChromaParamValues(chromaParam, hueParam, keyResult, steps);
-  delete chromaParam.clampInterpolatedChroma;
+  chromaParam.clampInterpolatedChroma = true;
   for (const point of chromaParam.points) {
     delete point.gamutLimit;
   }
@@ -1869,7 +1869,7 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 /**
  * Generate the full color system from engine state.
  * Side effect: remaps interpolate chroma (and single-include-step fixed chroma) in `state`
- * when clamp is on (default). With `clampInterpolatedChroma: false`, absolute C is left alone.
+ * when clamp is on. With `clampInterpolatedChroma` omitted/false (default), absolute C is left alone.
  * Multi-step fixed chroma in live state is left as requested; per-step render still clamps unless
  * interpolate chroma has clamp off.
  * @param {EngineState} state

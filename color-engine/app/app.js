@@ -2107,12 +2107,12 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
       clampToggle.addEventListener('change', () => {
         touch();
         if (clampToggle.checked) {
-          delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
+          param.clampInterpolatedChroma = true;
           const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
           applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
           clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
         } else {
-          param.clampInterpolatedChroma = false;
+          delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
           for (const point of param.points) {
             delete point.ratio;
             delete point.gamutLimit;

@@ -102,7 +102,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **ParamConfig**
   * `{ "mode": "fixed", "value": number, "ratio"? }` — `ratio` u single-include-step chromy (a runtime u fixed)
   * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }`  
-    * `clampInterpolatedChroma` (jen chroma; default `true`) — `false` = bez relative/clamp bodů i mezikroků
+    * `clampInterpolatedChroma` (jen chroma; default `false`) — `true` = relative/clamp bodů i mezikroků
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
@@ -112,7 +112,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; staré shared klíče se při importu ignorují)
 * `bg` **není** v configu — `bgHex` do `colorAtInteractionState` / `resolveModeInteractionStates`
 
-**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s clamp on → relative + clamp; s `clampInterpolatedChroma: false` → absolutní C + flag v JSON; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` se exportují s key palette.
+**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s `clampInterpolatedChroma: true` → relative + clamp + flag v JSON; default (off) → absolutní C, flag vynechán; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` se exportují s key palette.
 
 **Import** (`importEngineConfig`): validace → nové `id` palet → normalizace `includeSteps` → clamp/relative normalizace chroma; chybějící `states` → defaulty.
 
