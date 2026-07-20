@@ -1455,23 +1455,6 @@ export function importEngineConfig(data) {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {ParamConfig} param
- * @param {string} prefix
- * @param {string} paramName
- * @param {string[]} lines
- */
-function appendParamInterpolatorTokens(param, prefix, paramName, lines) {
-  if (param.mode !== 'interpolate') return;
-
-  const points = [...param.points].sort((a, b) => a.step - b.step);
-  for (let i = 0; i < points.length - 1; i++) {
-    const segNum = points.length > 2 ? `-${i + 1}` : '';
-    const bezier = param.interpolators[i] ?? LINEAR_BEZIER;
-    lines.push(`  --${prefix}-${paramName}-interpolator${segNum}: ${formatBezierCss(bezier)};`);
-  }
-}
-
-/**
  * @param {object} result
  * @param {number[]} steps — published grid steps (min/max always emitted separately)
  * @param {number} endStep
@@ -1494,7 +1477,8 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
 }
 
 /**
- * Build `:root { … }` CSS custom properties from engine state + already-generated palettes.
+ * Build `:root { … }` CSS custom properties — **colors only** (min / steps / max).
+ * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
  * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
  * @param {EngineState} state
@@ -1508,17 +1492,7 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   const lines = [];
 
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
-  lines.push(`  --${KEY_PALETTE_NAME}-start: ${state.keyPalette.lm.start.tone};`);
-  lines.push(`  --${KEY_PALETTE_NAME}-end: ${state.keyPalette.lm.end.tone};`);
-  lines.push(`  --key-tone-interpolator: ${formatBezierCss(state.keyPalette.lm.interpolator)};`);
-
-  const dmBezier = state.keyPalette.dm.interpolatorOverride
-    ? state.keyPalette.dm.interpolator
-    : invertBezier(state.keyPalette.lm.interpolator);
   appendPaletteColorTokens(keyResults.dm, steps, endStep, `${KEY_PALETTE_NAME}-dm`, lines, 'tone');
-  lines.push(`  --${KEY_PALETTE_NAME}-dm-start: ${state.keyPalette.dm.start.tone};`);
-  lines.push(`  --${KEY_PALETTE_NAME}-dm-end: ${state.keyPalette.dm.end.tone};`);
-  lines.push(`  --key-dm-tone-interpolator: ${formatBezierCss(dmBezier)};`);
 
   for (const palette of state.customPalettes) {
     const name = sanitizePaletteName(palette.name);
@@ -1527,12 +1501,7 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 
     const published = resolveIncludeSteps(palette.includeSteps, steps);
     appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
-    appendParamInterpolatorTokens(palette.lm.hue, name, 'hue', lines);
-    appendParamInterpolatorTokens(palette.lm.chroma, name, 'chroma', lines);
-
     appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
-    appendParamInterpolatorTokens(palette.dm.hue, `${name}-dm`, 'hue', lines);
-    appendParamInterpolatorTokens(palette.dm.chroma, `${name}-dm`, 'chroma', lines);
   }
 
   return `:root {\n${lines.join('\n')}\n}`;

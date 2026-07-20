@@ -2,7 +2,7 @@
 
 Tento projekt definuje základní pilíř design systému založený na barevném modelu **HCT (Hue, Chroma, Tone)** od Googlu. Cílem je vytvořit programově ovladatelný systém, který zajišťuje vizuální konzistenci a kontrastní integritu napříč barevnými schématy a světlým a tmavým režimem.
 
-Engine prozatím **generuje config a CSS tokeny**. Jak je projekt spotřebuje, řeší jiné vrstvy.
+Engine prozatím **generuje config a CSS tokeny** (CSS = jen barvy). Jak je projekt spotřebuje, řeší jiné vrstvy.
 
 **Konfigurace:** výchozí hodnoty žijí v enginu (`createDefaultState`). Projektový soubor [`config/engine-config.json`](./config/engine-config.json) má prioritu — playground ho při startu načte; když chybí nebo selže, použije se engine default. GUI Import přepíše jen aktuální session.
 
@@ -28,16 +28,17 @@ Interpolace mezi klíčovými body (`start`, `end`, případně mezikroky) prob�
 * **Zaokrouhlování:** Všechny hodnoty vygenerované interpolátorem (Tone, H, C) se zaokrouhlují na **celá čísla**.
 
 ## 3. Primitives & Tokens
-Systém umožňuje úpravu následujících proměnných a interpolátorů:
+Systém umožňuje úpravu následujících proměnných a interpolátorů (v **configu** / enginu). Do CSS tokenů jdou jen **barvy**.
 
 | Proměnná / Interpolátor | Typ | Popis |
 | :--- | :--- | :--- |
-| `min` | Hardcoded | Extrémní barva na pozici `0` — mimo paletu (defaultně nejsvětlejší v LM) |
-| `max` | Hardcoded | Extrémní barva na pozici `end + 10` — mimo paletu (defaultně nejtmavší v LM) |
-| `start` | Token | Klíčový bod `10` — začátek interpolace |
-| `end` | Token | Klíčový bod posledního kroku palety (při 10 krocích: `100`) — konec interpolace |
-| `key-tone-interpolator` | Interpolátor | Bézier křivka pro Tone v `key-palette` (LM) |
-| `key-dm-tone-interpolator` | Interpolátor | Bézier křivka pro Tone v `key-palette-dm` (DM) |
+| `min` | Barva (CSS) | Extrémní barva na pozici `0` — mimo paletu (defaultně nejsvětlejší v LM) |
+| `max` | Barva (CSS) | Extrémní barva na pozici `end + 10` — mimo paletu (defaultně nejtmavší v LM) |
+| kroky `10…end` | Barva (CSS) | Interpolované barvy palety |
+| `start` | Config | Tone klíčového bodu `10` — začátek interpolace |
+| `end` | Config | Tone klíčového bodu posledního kroku (při 10 krocích: `100`) |
+| `key-tone-interpolator` | Config | Bézier křivka pro Tone v `key-palette` (LM) |
+| `key-dm-tone-interpolator` | Config | Bézier křivka pro Tone v `key-palette-dm` (DM) |
 
 **Výchozí hodnoty Tone pro `start` a `end`:**
 
@@ -49,7 +50,7 @@ Systém umožňuje úpravu následujících proměnných a interpolátorů:
 ## 4. Odvozené palety (Custom Palettes)
 Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette-dm` u varianty `-dm`), ale umožňují:
 1.  **Override H a C:** Nastavení vlastního odstínu a sytosti.
-2.  **Vlastní interpolátory:**
+2.  **Vlastní interpolátory** (config / engine, ne CSS tokeny):
     * `[nazev]-hue-interpolator`
     * `[nazev]-chroma-interpolator`
     * Podpora vícebodové interpolace (např. suffix `-1`, `-2` pro případ interpolace mezi více body, např. 10–50–100, tedy interpolátor mezi 10–50 a druhý mezi 50–100). Kroky `min` a `max` se do interpolace H/C nepočítají.

@@ -150,7 +150,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
 * **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
-* **Tokeny:** `buildTokensCss(state, keyResults, customResults, steps, endStep)` — skládá CSS z **už spočítaných** palet (negeneruje znovu); custom jen `includeSteps`
+* **Tokeny:** `buildTokensCss(state, keyResults, customResults, steps, endStep)` — skládá CSS z **už spočítaných** palet (negeneruje znovu); jen barvy; custom jen `includeSteps`
 * **Jména:** `sanitizePaletteName`, `filterPaletteNameInput`
 
 ---
@@ -193,16 +193,15 @@ Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segme
 
 ## 8. Výstupní CSS tokeny
 
-`tokensCss` je jeden blok `:root { … }`.
+`tokensCss` je jeden blok `:root { … }` — **jen barvy** (hex). Interpolátory, `start`/`end` tony a H/C parametry žijí v config JSON.
 
 Příklady jmen (po `sanitizePaletteName`):
 
 * `--key-palette-0`, `--key-palette-10`, …, `--key-palette-{end+10}`
-* `--key-palette-start`, `--key-palette-end`, `--key-tone-interpolator`
-* totéž pro DM: `--key-palette-dm-…`, `--key-dm-tone-interpolator`
-* custom: `--{name}-10`, … (jen kroky z `includeSteps`; `0` a `end+10` vždy), `--{name}-dm-…`, `--{name}-hue-interpolator`, `--{name}-chroma-interpolator` (u více segmentů `-1`, `-2`, …)
+* totéž pro DM: `--key-palette-dm-…`
+* custom: `--{name}-10`, … (jen kroky z `includeSteps`; `0` a `end+10` vždy), `--{name}-dm-…`
 
-Hex barvy; u kroků palety jsou v komentáři T nebo H/C.
+U kroků palety jsou v komentáři T (key) nebo H/C (custom).
 
 ---
 
