@@ -376,7 +376,7 @@ function patchTokensOutput(tokensCss) {
   patchEngineTokensStyle(css);
 }
 
-/** Live `:root` tokens for realtime swatch POC (`oklch(from … var(--state-…))`). */
+/** Live `:root` tokens for runtime swatch POC (`oklch(from … var(--state-…))`). */
 let engineTokensStyleEl = /** @type {HTMLStyleElement | null} */ (null);
 
 /** @param {string} tokensCss */
@@ -855,7 +855,7 @@ function refreshPreviews() {
   const system = generateSystem(state);
   const { endStep, keyPalettes, customPalettes, tokensCss } = system;
 
-  // Inject tokens before swatch patches so realtime CSS vars exist for active hover.
+  // Inject tokens before swatch patches so runtime CSS vars exist for active hover.
   patchTokensOutput(tokensCss);
   patchConfigOutput();
 
@@ -970,13 +970,13 @@ function setSwatchFaceColor(el, hex) {
 }
 
 /**
- * Realtime: `--swatch-bg` = oklch(from … ΔL/100) so contrast-color tracks the visible fill.
+ * Runtime: `--swatch-bg` = oklch(from … ΔL/100) so contrast-color tracks the visible fill.
  * @param {HTMLElement} el
  * @param {string} restHex
  * @param {string} stateVar
  * @returns {number} resulting L 0–100 (for label)
  */
-function setSwatchFaceRealtimeCss(el, restHex, stateVar) {
+function setSwatchFaceRuntimeCss(el, restHex, stateVar) {
   el.style.setProperty('--swatch-rest', restHex);
   const raw = getComputedStyle(document.documentElement).getPropertyValue(stateVar).trim();
   const dl = Number(raw);
@@ -994,13 +994,13 @@ function setSwatchFaceRealtimeCss(el, restHex, stateVar) {
  * @param {number} step
  * @param {1 | 2} level
  */
-function realtimeStateVarName(mode, step, level) {
+function runtimeStateVarName(mode, step, level) {
   const prefix = mode === 'dm' ? 'state-dm' : 'state';
   return `--${prefix}-${step}-state${level}`;
 }
 
 /**
- * Apply hover/pressed face + label (realtime = CSS tokens; build = JS hex).
+ * Apply hover/pressed face + label (runtime = CSS tokens; build = JS hex).
  * @param {HTMLElement} colorEl
  * @param {1 | 2} level
  */
@@ -1011,9 +1011,9 @@ function applyInteractionSwatchLevel(colorEl, level) {
   const states = ctx.getStates();
   const cfg = resolveInteractionStates(states);
 
-  if (cfg.delivery === 'realtime' && Number.isFinite(ctx.step)) {
-    const stateVar = realtimeStateVarName(ctx.mode, ctx.step, level);
-    const L = setSwatchFaceRealtimeCss(colorEl, ctx.restHex, stateVar);
+  if (cfg.delivery === 'runtime' && Number.isFinite(ctx.step)) {
+    const stateVar = runtimeStateVarName(ctx.mode, ctx.step, level);
+    const L = setSwatchFaceRuntimeCss(colorEl, ctx.restHex, stateVar);
     if (valueEl) valueEl.textContent = `L: ${Math.round(L * 10) / 10}`;
     return;
   }
@@ -1589,9 +1589,9 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
 
     modeRow.appendChild(createSimpleSelect('Delivery', lmStates.delivery, [
       { value: 'build', label: 'Build (hex states)' },
-      { value: 'realtime', label: 'Realtime (ΔL)' },
+      { value: 'runtime', label: 'Runtime (ΔL)' },
     ], (v) => {
-      lmStates.delivery = /** @type {'build' | 'realtime'} */ (v);
+      lmStates.delivery = /** @type {'build' | 'runtime'} */ (v);
       syncStatesUi();
       scheduleRefreshPreviews();
     }));
@@ -1663,7 +1663,7 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
     const gamutEl = gamutSelect.querySelector('select');
     const gamutActive = isBuild && lmStates.space === 'oklch';
 
-    // Realtime: lock Space to OKLCH visually; keep stored preference for when build returns.
+    // Runtime: lock Space to OKLCH visually; keep stored preference for when build returns.
     if (spaceEl instanceof HTMLSelectElement) {
       spaceEl.disabled = !isBuild;
       spaceEl.value = isBuild ? lmStates.space : 'oklch';
@@ -1672,7 +1672,7 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
     relativeCb.disabled = !isBuild;
     relativeCb.checked = isBuild ? lmStates.relativeChroma !== false : false;
 
-    // HCT / realtime: keep gamut visible but locked to sRGB (stored oklchGamut preserved).
+    // HCT / runtime: keep gamut visible but locked to sRGB (stored oklchGamut preserved).
     gamutSelect.hidden = false;
     if (gamutEl instanceof HTMLSelectElement) {
       gamutEl.disabled = !gamutActive;
@@ -2485,7 +2485,7 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, interact
 
 /**
  * Live state1 (hover) / state2 (pressed) preview on palette steps.
- * Realtime delivery uses CSS `oklch(from … var(--state-…))` (same as tokens comment).
+ * Runtime delivery uses CSS `oklch(from … var(--state-…))` (same as tokens comment).
  * @param {HTMLElement} colorEl
  * @param {{
  *   restHex: string,
@@ -2545,7 +2545,7 @@ function attachSwatchInteraction(colorEl, opts) {
 }
 
 /**
- * Hover/pressed readout: HCT → T; OKLCH / realtime → L.
+ * Hover/pressed readout: HCT → T; OKLCH / runtime → L.
  * @param {string} hex
  * @param {import('../src/color-engine.js').InteractionStatesConfig} states
  */

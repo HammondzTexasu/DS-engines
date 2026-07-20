@@ -102,10 +102,10 @@ Stavy na **krocích palety** (ne `min`/`max`).
 | `delivery` | Space | Relative chroma | CSS tokeny |
 | :--- | :--- | :--- | :--- |
 | **`build`** (default) | `hct` nebo `oklch` | volitelně | `--{prefix}-{step}-state1` / `state2` (hex) |
-| **`realtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (ΔL; kotva = key L; nezávislé na počtu palet) |
+| **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (ΔL; kotva = key L; nezávislé na počtu palet) |
 
-* Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: realtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
-* Realtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token ΔL je 0–100, CSS `l` je 0–1.
-* Playground realtime hover/pressed používá stejný CSS zápis (tokeny injektované do DOM); build zůstává u JS hex.
-* Playground: hover/pressed přepíše label na `T:` (HCT) nebo `L:` (OKLCH / realtime) podle vykreslené barvy.
+* Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: runtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
+* Runtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token ΔL je 0–100, CSS `l` je 0–1.
+* Playground runtime hover/pressed používá stejný CSS zápis (tokeny injektované do DOM); build zůstává u JS hex.
+* Playground: hover/pressed přepíše label na `T:` (HCT) nebo `L:` (OKLCH / runtime) podle vykreslené barvy.
 * API: `resolveModeInteractionStates(keyPalette, mode)`, `colorAtInteractionState(color, bgHex, states, level)`.

@@ -28,12 +28,12 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * LM holds full config; DM stores only deltas (`InteractionStatesDeltas`) and inherits
  * delivery / space / relativeChroma / oklchGamut from LM via `resolveModeInteractionStates`.
  * `delivery: 'build'` — emit hex `--*-state1` / `--*-state2` (space HCT or OKLCH).
- * `delivery: 'realtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (ΔL).
+ * `delivery: 'runtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (ΔL).
  * `oklchGamut` — used when build + OKLCH + relativeChroma (sRGB / Display P3 max-C).
  * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesDeltas
  * @typedef {InteractionStatesDeltas & {
  *   relativeChroma: boolean,
- *   delivery: 'build' | 'realtime',
+ *   delivery: 'build' | 'runtime',
  *   space: 'hct' | 'oklch',
  *   oklchGamut: 'srgb' | 'p3',
  * }} InteractionStatesConfig
@@ -748,7 +748,7 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
 }
 
 /**
- * Stored LM states (config / GUI). Does **not** force realtime overrides —
+ * Stored LM states (config / GUI). Does **not** force runtime overrides —
  * preferences for space / relative / gamut survive delivery toggles.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
  * @returns {InteractionStatesConfig}
@@ -757,7 +757,7 @@ export function normalizeStoredInteractionStates(states) {
   const deltas = resolveInteractionDeltas(states, false);
   return {
     ...deltas,
-    delivery: states?.delivery === 'realtime' ? 'realtime' : 'build',
+    delivery: states?.delivery === 'runtime' ? 'runtime' : 'build',
     space: states?.space === 'oklch' ? 'oklch' : 'hct',
     relativeChroma: typeof states?.relativeChroma === 'boolean' ? states.relativeChroma : true,
     oklchGamut: states?.oklchGamut === 'p3' ? 'p3' : 'srgb',
@@ -765,14 +765,14 @@ export function normalizeStoredInteractionStates(states) {
 }
 
 /**
- * Effective LM states for math / tokens (realtime → OKLCH + relativeChroma off).
+ * Effective LM states for math / tokens (runtime → OKLCH + relativeChroma off).
  * Does not mutate stored preferences.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
  * @returns {InteractionStatesConfig}
  */
 export function resolveInteractionStates(states) {
   const stored = normalizeStoredInteractionStates(states);
-  if (stored.delivery !== 'realtime') return stored;
+  if (stored.delivery !== 'runtime') return stored;
   return {
     ...stored,
     space: 'oklch',
@@ -831,7 +831,7 @@ export function applyInteractionTone(colorTone, bgTone, states, level) {
 }
 
 /**
- * Signed ΔL for realtime tokens (`next − current`).
+ * Signed ΔL for runtime tokens (`next − current`).
  * @param {number} colorL
  * @param {number} bgL
  * @param {InteractionStatesConfig} states
@@ -873,7 +873,7 @@ function colorAtInteractionStateOklch(hex, bgHex, states, level) {
 /**
  * Interaction color for a palette step (not min/max).
  * Build + HCT: shift T, optional HCT relative chroma.
- * Build + OKLCH / realtime: shift OKLCH L (realtime never uses relative chroma).
+ * Build + OKLCH / runtime: shift OKLCH L (runtime never uses relative chroma).
  * @param {{ hue: number, chroma: number, tone: number, hex?: string }} color
  * @param {string} bgHex — surface behind the color (often key min)
  * @param {InteractionStatesConfig} states
@@ -1776,7 +1776,7 @@ function appendBuildInteractionStateTokens(result, steps, prefix, lines, states,
 }
 
 /**
- * Realtime: one shared ΔL set per mode, anchored on key-palette step L (all palettes share the grid).
+ * Runtime: one shared ΔL set per mode, anchored on key-palette step L (all palettes share the grid).
  * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
  * @param {'lm' | 'dm'} mode
@@ -1784,7 +1784,7 @@ function appendBuildInteractionStateTokens(result, steps, prefix, lines, states,
  * @param {InteractionStatesConfig} states
  * @param {string} bgHex
  */
-function appendRealtimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex) {
+function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex) {
   const cfg = resolveInteractionStates(states);
   const bgL = hexToOklch(bgHex).l;
   const prefix = mode === 'dm' ? 'state-dm' : 'state';
@@ -1802,7 +1802,7 @@ function appendRealtimeStateDeltaTokens(keyResult, steps, mode, lines, states, b
  * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
  * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
- * Realtime: universal `--state-{step}-state1|2` / `--state-dm-…` (ΔL, key-anchored, once).
+ * Runtime: universal `--state-{step}-state1|2` / `--state-dm-…` (ΔL, key-anchored, once).
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
  * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
@@ -1814,16 +1814,16 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   const lines = [];
   const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm');
   const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm');
-  const realtime = lmStates.delivery === 'realtime';
+  const runtime = lmStates.delivery === 'runtime';
 
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
-  if (!realtime) {
+  if (!runtime) {
     appendBuildInteractionStateTokens(
       keyResults.lm, steps, KEY_PALETTE_NAME, lines, lmStates, keyResults.lm.min,
     );
   }
   appendPaletteColorTokens(keyResults.dm, steps, endStep, `${KEY_PALETTE_NAME}-dm`, lines, 'tone');
-  if (!realtime) {
+  if (!runtime) {
     appendBuildInteractionStateTokens(
       keyResults.dm, steps, `${KEY_PALETTE_NAME}-dm`, lines, dmStates, keyResults.dm.min,
     );
@@ -1836,31 +1836,31 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 
     const published = resolveIncludeSteps(palette.includeSteps, steps);
     appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
-    if (!realtime) {
+    if (!runtime) {
       appendBuildInteractionStateTokens(
         results.lm, published, name, lines, lmStates, keyResults.lm.min,
       );
     }
     appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
-    if (!realtime) {
+    if (!runtime) {
       appendBuildInteractionStateTokens(
         results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min,
       );
     }
   }
 
-  if (realtime) {
+  if (runtime) {
     lines.push(
       '',
-      '  /* Realtime interaction states — signed OKLCH ΔL on 0–100 scale (shared across palettes).',
+      '  /* Runtime interaction states — signed OKLCH ΔL on 0–100 scale (shared across palettes).',
       '   * CSS relative `l` is 0–1, so divide the token by 100:',
       '   *   background: oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h);',
       '   * LM: --state-{step}-state1|state2',
       '   * DM: --state-dm-{step}-state1|state2',
       '   */',
     );
-    appendRealtimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min);
-    appendRealtimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min);
+    appendRuntimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min);
+    appendRuntimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min);
   }
 
   return `:root {\n${lines.join('\n')}\n}`;

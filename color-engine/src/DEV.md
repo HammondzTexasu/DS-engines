@@ -108,7 +108,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `gamutLimit` = jen runtime, **nikdy** do JSON
 * **`keyPalette.lm.states`** — plná strategie + LM delty:
   * `{ "deltaMin", "deltaMax", "state2Scale", "relativeChroma", "delivery", "space", "oklchGamut" }`
-  * `delivery`: `"build"` \| `"realtime"`; `space`: `"hct"` \| `"oklch"`; `oklchGamut`: `"srgb"` \| `"p3"`
+  * `delivery`: `"build"` \| `"runtime"`; `space`: `"hct"` \| `"oklch"`; `oklchGamut`: `"srgb"` \| `"p3"`
 * **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; staré shared klíče se při importu ignorují)
 * `bg` **není** v configu — `bgHex` do `colorAtInteractionState` / `resolveModeInteractionStates`
 
@@ -130,8 +130,8 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
 | `createDefaultInteractionStates()` | LM default: deltas + `delivery: build`, `space: hct`, `oklchGamut: srgb` |
 | `createDefaultInteractionDeltas(forDm?)` | Jen `deltaMin` / `deltaMax` / `state2Scale` (DM default při `true`) |
-| `normalizeStoredInteractionStates(states)` | LM config/GUI shape — **bez** realtime override space/relative |
-| `resolveInteractionStates(states)` | Efektivní LM (realtime → OKLCH + relative off; nemění uložené preference) |
+| `normalizeStoredInteractionStates(states)` | LM config/GUI shape — **bez** runtime override space/relative |
+| `resolveInteractionStates(states)` | Efektivní LM (runtime → OKLCH + relative off; nemění uložené preference) |
 | `resolveInteractionDeltas(deltas, forDm?)` | Normalizace DM/LM deltas |
 | `resolveModeInteractionStates(keyPalette, mode)` | Efektivní stavy: LM strategy + mode deltas |
 | `importEngineConfig(json)` | JSON → state |
@@ -150,14 +150,14 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
 * **Interaction states:** `…`, `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`  
-  * Uložené preference (space/relative/gamut) přežijí realtime; math/tokeny berou efektivní resolve.
+  * Uložené preference (space/relative/gamut) přežijí runtime; math/tokeny berou efektivní resolve.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
 * **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`, `applyBrandStepOverride`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
-* **Tokeny:** `buildTokensCss(...)` — barvy min/steps/max; build = per-palette `state1`/`state2` hex; realtime = univerzální `--state-*-state1|2` / `--state-dm-*` (ΔL, key L)
+* **Tokeny:** `buildTokensCss(...)` — barvy min/steps/max; build = per-palette `state1`/`state2` hex; runtime = univerzální `--state-*-state1|2` / `--state-dm-*` (ΔL, key L)
 * **Jména:** `sanitizePaletteName`, `filterPaletteNameInput`
 
 ---
