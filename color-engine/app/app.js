@@ -16,6 +16,7 @@ import {
   hexToHct,
   hctToHex,
   colorAtInteractionState,
+  interactionStateDelta,
   createDefaultInteractionStates,
   createDefaultInteractionDeltas,
   resolveInteractionStates,
@@ -48,6 +49,8 @@ import {
   parseBrandHex,
   nearestStepForTone,
   resolveParam,
+  resolvePivotTone,
+  resolvePivotStep,
 } from '../src/color-engine.js';
 import { hexToOklch } from '../lib/oklch-relative-chroma.mjs';
 
@@ -1001,6 +1004,7 @@ function runtimeStateVarName(mode, step, level) {
 
 /**
  * Apply hover/pressed face + label (runtime = CSS tokens; build = JS hex).
+ * OKLCH / runtime label = L_rest + Δ (same math; not L from hex roundtrip).
  * @param {HTMLElement} colorEl
  * @param {1 | 2} level
  */
@@ -1009,12 +1013,13 @@ function applyInteractionSwatchLevel(colorEl, level) {
   if (!ctx) return;
   const valueEl = colorEl.querySelector('.swatch-value');
   const states = ctx.getStates();
-  const cfg = resolveInteractionStates(states);
+  const cfg = resolveInteractionStates(states, getSteps(state.stepCount));
+  const pivotTone = typeof ctx.getPivotTone === 'function' ? ctx.getPivotTone() : 60;
 
   if (cfg.delivery === 'runtime' && Number.isFinite(ctx.step)) {
     const stateVar = runtimeStateVarName(ctx.mode, ctx.step, level);
     const L = setSwatchFaceRuntimeCss(colorEl, ctx.restHex, stateVar);
-    if (valueEl) valueEl.textContent = `L: ${Math.round(L * 10) / 10}`;
+    if (valueEl) valueEl.textContent = formatInteractionLightness(L);
     return;
   }
 
@@ -1023,9 +1028,23 @@ function applyInteractionSwatchLevel(colorEl, level) {
     ctx.getBgHex(),
     states,
     level,
+    pivotTone,
   );
   setSwatchFaceColor(colorEl, next.hex);
-  if (valueEl) valueEl.textContent = formatInteractionSwatchValue(next.hex, states);
+  if (!valueEl) return;
+
+  if (cfg.space === 'oklch') {
+    const bgTone = hexToHct(ctx.getBgHex()).tone;
+    const delta = interactionStateDelta(ctx.tone, bgTone, cfg, level, pivotTone);
+    valueEl.textContent = formatInteractionLightness(hexToOklch(ctx.restHex).l + delta);
+  } else {
+    valueEl.textContent = `T: ${next.tone}`;
+  }
+}
+
+/** @param {number} L */
+function formatInteractionLightness(L) {
+  return `L: ${Math.round(L * 10) / 10}`;
 }
 
 /**
@@ -1132,36 +1151,48 @@ function ensureKeyModeStates(mode) {
     return;
   }
   if (!state.keyPalette.lm.states) {
-    state.keyPalette.lm.states = createDefaultInteractionStates();
+    state.keyPalette.lm.states = createDefaultInteractionStates(state.stepCount);
   } else {
     Object.assign(
       state.keyPalette.lm.states,
-      normalizeStoredInteractionStates(/** @type {Partial<import('../src/color-engine.js').InteractionStatesConfig>} */ (state.keyPalette.lm.states)),
+      normalizeStoredInteractionStates(
+        /** @type {Partial<import('../src/color-engine.js').InteractionStatesConfig>} */ (state.keyPalette.lm.states),
+        getSteps(state.stepCount),
+      ),
     );
   }
 }
 
 /**
+ * Shared playground interaction handlers for a key mode.
+ * @param {'lm' | 'dm'} mode
+ */
+function createInteractionHandlers(mode) {
+  return {
+    mode,
+    getBgHex: () => state.keyPalette[mode].min,
+    getStates: () => {
+      ensureKeyModeStates('lm');
+      ensureKeyModeStates(mode);
+      return resolveModeInteractionStates(state.keyPalette, mode, getSteps(state.stepCount));
+    },
+    getPivotTone: () => {
+      const steps = getSteps(state.stepCount);
+      const key = generateKeyPalettes(state.keyPalette, steps)[mode];
+      const states = resolveModeInteractionStates(state.keyPalette, mode, steps);
+      return resolvePivotTone(states, key, steps);
+    },
+  };
+}
+
+/**
  * Playground default: interaction bg from key min (page surface).
  * @param {string} previewId
- * @returns {{
- *   mode: 'lm' | 'dm',
- *   getBgHex: () => string,
- *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
- * } | null}
+ * @returns {ReturnType<typeof createInteractionHandlers> | null}
  */
 function getInteractionForPreview(previewId) {
-  const mode = getTextMode(previewId);
   if (previewId.startsWith('key-') || previewId.startsWith('custom-')) {
-    return {
-      mode,
-      getBgHex: () => state.keyPalette[mode].min,
-      getStates: () => {
-        ensureKeyModeStates('lm');
-        ensureKeyModeStates(mode);
-        return resolveModeInteractionStates(state.keyPalette, mode);
-      },
-    };
+    return createInteractionHandlers(getTextMode(previewId));
   }
   return null;
 }
@@ -1253,8 +1284,9 @@ function createStepCountControl() {
     input.value = String(value);
     syncHugInputWidth(input);
     if (value === state.stepCount) return;
+    const previousStepCount = state.stepCount;
     state.stepCount = value;
-    normalizeStateForStepCount(state);
+    normalizeStateForStepCount(state, previousStepCount);
     reapplyBrandPerfectFitAfterStepCountChange();
     render();
   });
@@ -1413,15 +1445,7 @@ function createKeyPaletteFieldset(keyResults, steps, endStep, expandedParamGroup
         config.max = hex;
         scheduleRefreshPreviews();
       },
-    }, mode, {
-      mode,
-      getBgHex: () => state.keyPalette[mode].min,
-      getStates: () => {
-        ensureKeyModeStates('lm');
-        ensureKeyModeStates(mode);
-        return resolveModeInteractionStates(state.keyPalette, mode);
-      },
-    });
+    }, mode, createInteractionHandlers(mode));
     swatchRow.dataset.preview = `key-${mode}`;
     segment.appendChild(swatchRow);
 
@@ -1596,6 +1620,18 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
       scheduleRefreshPreviews();
     }));
 
+    const gridSteps = getSteps(state.stepCount);
+    lmStates.pivotStep = resolvePivotStep(lmStates.pivotStep, gridSteps);
+    modeRow.appendChild(createSimpleSelect(
+      'Pivot step (T threshold)',
+      String(lmStates.pivotStep),
+      gridSteps.map((step) => ({ value: String(step), label: String(step) })),
+      (v) => {
+        lmStates.pivotStep = resolvePivotStep(Number(v), getSteps(state.stepCount));
+        scheduleRefreshPreviews();
+      },
+    ));
+
     spaceSelect = createSimpleSelect('Space', lmStates.space, [
       { value: 'hct', label: 'HCT' },
       { value: 'oklch', label: 'OKLCH' },
@@ -1657,7 +1693,7 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
   function syncStatesUi() {
     if (isDm || !lmStates || !spaceSelect || !gamutSelect || !relativeRow || !relativeCb) return;
 
-    Object.assign(lmStates, normalizeStoredInteractionStates(lmStates));
+    Object.assign(lmStates, normalizeStoredInteractionStates(lmStates, getSteps(state.stepCount)));
     const isBuild = lmStates.delivery === 'build';
     const spaceEl = spaceSelect.querySelector('select');
     const gamutEl = gamutSelect.querySelector('select');
@@ -1857,9 +1893,6 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
       titleInput.value = filtered;
     }
     palette.name = filtered;
-    if (state.brand && brandLink?.paletteId === palette.id) {
-      state.brand.palette = filtered;
-    }
     updatePaletteNameLabels(fs, filtered);
     scheduleRefreshPreviews();
   });
@@ -1892,15 +1925,7 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
     label.textContent = modeLabel;
     segment.appendChild(label);
 
-    const swatchRow = createSwatchRow(customResult, publishedSteps, endStep, 'hc', null, mode, {
-      mode,
-      getBgHex: () => state.keyPalette[mode].min,
-      getStates: () => {
-        ensureKeyModeStates('lm');
-        ensureKeyModeStates(mode);
-        return resolveModeInteractionStates(state.keyPalette, mode);
-      },
-    });
+    const swatchRow = createSwatchRow(customResult, publishedSteps, endStep, 'hc', null, mode, createInteractionHandlers(mode));
     swatchRow.dataset.preview = `custom-${palette.id}-${mode}`;
     segment.appendChild(swatchRow);
 
@@ -2476,6 +2501,7 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, interact
       mode: interaction.mode,
       getBgHex: interaction.getBgHex,
       getStates: interaction.getStates,
+      getPivotTone: interaction.getPivotTone,
     });
   }
 
@@ -2497,6 +2523,7 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, interact
  *   mode: 'lm' | 'dm',
  *   getBgHex: () => string,
  *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
+ *   getPivotTone: () => number,
  * }} opts
  */
 function attachSwatchInteraction(colorEl, opts) {
@@ -2511,6 +2538,7 @@ function attachSwatchInteraction(colorEl, opts) {
     mode: opts.mode,
     getBgHex: opts.getBgHex,
     getStates: opts.getStates,
+    getPivotTone: opts.getPivotTone,
     level: /** @type {0 | 1 | 2} */ (0),
   };
 
@@ -2542,20 +2570,6 @@ function attachSwatchInteraction(colorEl, opts) {
     else showLevel(0);
   });
   colorEl.addEventListener('pointercancel', () => showLevel(0));
-}
-
-/**
- * Hover/pressed readout: HCT → T; OKLCH / runtime → L.
- * @param {string} hex
- * @param {import('../src/color-engine.js').InteractionStatesConfig} states
- */
-function formatInteractionSwatchValue(hex, states) {
-  const cfg = resolveInteractionStates(states);
-  if (cfg.space === 'oklch') {
-    const L = Math.round(hexToOklch(hex).l * 10) / 10;
-    return `L: ${L}`;
-  }
-  return `T: ${hexToHct(hex).tone}`;
 }
 
 /**

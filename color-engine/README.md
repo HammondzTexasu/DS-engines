@@ -82,30 +82,32 @@ Založení škály z konkrétní barvy (headless i GUI). Seed se ukládá do con
 
 * Najde key krok s tone nejbližším seed T.
 * **`perfectFit: false`:** jen nastaví LM hue + chroma u brand custom palety (podle `paletteId` / jména `palette`, default první). Override hexu se neaplikuje.
-* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T, a při `generateSystem` **vynutí seed hex 1:1** na tom LM kroku (runtime override — křivka + HCT zaokrouhlení jinak hex mírně posunou). DM zůstává default (invert LM, pokud není override).
-* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`, `clearBrandConfig(state)`, `applyBrandStepOverride` (volá `generateSystem`).
-* Import jen obnoví `state.brand` (křivka + H/C už jsou v configu); hex override běží při generování.
-* **GUI:** link zrcadlí `state.brand`; při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje. Ruční edit LM H/C brand palety / smazání linku → `brand` z configu pryč.
+* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T, a při `generateSystem` **vynutí seed hex 1:1** na tom LM kroku (hex override při generování — křivka + HCT zaokrouhlení jinak hex mírně posunou). DM zůstává default (invert LM, pokud není override).
+* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`, `clearBrandConfig(state)`, `applyBrandStepOverride` (volá ho `generateSystem`).
+* **Import** obnoví jen `state.brand` (a GUI link) — **ne** znovu ohýbá křivku; H/C a interpolátor už jsou v configu. Hex override běží až při generování. `brand.palette` musí sedět na existující custom paletu, jinak se `brand` při importu **zahodí**.
+* **GUI:** link zrcadlí `state.brand`; při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje (`applyBrandColor`). Ruční edit LM H/C brand palety / smazání linku / vypnutí Perfect fit → `brand` z configu pryč; **ohnutá LM křivka zůstává**, dokud ji uživatel nezmění.
 
-## 5. Interaction states (delta L / T)
+## 5. Interaction states (delta T → delivery)
 
 Stavy na **krocích palety** (ne `min`/`max`).
 
-* **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`
+* **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`, `pivotStep`
 * **Per mode deltas:** `deltaMin` / `deltaMax` / `state2Scale` — LM i DM (DM config má jen tyto tři)
-* **`bg`** = povrch za barvou (playground: key `min`)
-* `|Δ| = deltaMin + (|L − L_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15)
-* Směr: L/T > 50 → ztmavit; jinak zesvětlit. **state1** = 1×; **state2** = × `state2Scale`
+* **Matika vždy HCT T:** `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15)
+* **`pivotStep`:** krok key mřížky; prah = **T** toho kroku. `T_barvy > T_prah` → ztmavit, jinak zesvětlit. Při změně `stepCount` se step proporčně přemapuje. DM dědí z LM.
+* **`bg`** = povrch za barvou (playground: key `min`) — do matiky jde jeho HCT T
+* **state1** = 1×; **state2** = × `state2Scale` — výsledné |Δ| / signed Δ se bere na **1 desetinu** (build i runtime tokeny)
+* **OKLCH / runtime** jen provedení: stejné Δ z T se přičte k OKLCH L (případně relative C / gamut)
 
 ### Delivery
 
 | `delivery` | Space | Relative chroma | CSS tokeny |
 | :--- | :--- | :--- | :--- |
 | **`build`** (default) | `hct` nebo `oklch` | volitelně | `--{prefix}-{step}-state1` / `state2` (hex) |
-| **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (ΔL; kotva = key L; nezávislé na počtu palet) |
+| **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (Δ z T; kotva = key krok; aplikace jako OKLCH L) |
 
 * Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: runtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
-* Runtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token ΔL je 0–100, CSS `l` je 0–1.
+* Runtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token je 0–100, CSS `l` je 0–1.
 * Playground runtime hover/pressed používá stejný CSS zápis (tokeny injektované do DOM); build zůstává u JS hex.
-* Playground: hover/pressed přepíše label na `T:` (HCT) nebo `L:` (OKLCH / runtime) podle vykreslené barvy.
-* API: `resolveModeInteractionStates(keyPalette, mode)`, `colorAtInteractionState(color, bgHex, states, level)`.
+* Playground: hover/pressed → `T:` (HCT) nebo `L: L_rest + Δ` (OKLCH / runtime; ne L z hex roundtripu).
+* API: `resolveModeInteractionStates`, `resolvePivotTone`, `colorAtInteractionState(color, bgHex, states, level, pivotTone)`.

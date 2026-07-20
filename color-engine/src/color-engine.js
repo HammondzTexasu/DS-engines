@@ -26,16 +26,18 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
 /**
  * Interaction states for palette steps (not min/max).
  * LM holds full config; DM stores only deltas (`InteractionStatesDeltas`) and inherits
- * delivery / space / relativeChroma / oklchGamut from LM via `resolveModeInteractionStates`.
+ * delivery / space / relativeChroma / oklchGamut / pivotStep from LM via `resolveModeInteractionStates`.
  * `delivery: 'build'` — emit hex `--*-state1` / `--*-state2` (space HCT or OKLCH).
- * `delivery: 'runtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (ΔL).
- * `oklchGamut` — used when build + OKLCH + relativeChroma (sRGB / Display P3 max-C).
+ * `delivery: 'runtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (Δ from HCT T math, applied as OKLCH L).
+ * `oklchGamut` — used when build + OKLCH (sRGB / Display P3 max-C).
+ * `pivotStep` — key grid step whose HCT T is the lighten/darken threshold (LM only; remapped with stepCount).
  * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesDeltas
  * @typedef {InteractionStatesDeltas & {
  *   relativeChroma: boolean,
  *   delivery: 'build' | 'runtime',
  *   space: 'hct' | 'oklch',
  *   oklchGamut: 'srgb' | 'p3',
+ *   pivotStep: number,
  * }} InteractionStatesConfig
  */
 /** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig | InteractionStatesDeltas, interpolatorOverride?: boolean }} KeyPaletteConfig */
@@ -79,9 +81,6 @@ export const DEFAULT_STATE_DELTA_MAX_DM = 15;
 
 /** Default state2 magnitude = state1 × this scale. */
 export const DEFAULT_STATE2_SCALE = 2;
-
-/** HCT tone pivot: above → darken on interaction; at/below → lighten. */
-export const INTERACTION_TONE_PIVOT = 50;
 
 export const ENGINE_CONFIG_VERSION = 1;
 
@@ -710,16 +709,90 @@ export function createDefaultInteractionDeltas(forDm = false) {
 }
 
 /**
+ * Default pivot step id for a grid (prefer 60 → 5 darken / 5 lighten on 10-step grid).
+ * @param {number} stepCount
+ * @returns {number}
+ */
+export function defaultPivotStep(stepCount) {
+  const steps = getSteps(Math.max(1, Math.round(stepCount) || 1));
+  if (!steps.length) return 10;
+  return resolvePivotStep(60, steps);
+}
+
+/**
+ * Snap / pick a valid pivot step on the grid.
+ * @param {unknown} pivotStep
+ * @param {number[]} steps
+ * @returns {number}
+ */
+export function resolvePivotStep(pivotStep, steps) {
+  if (!steps.length) return 10;
+  if (typeof pivotStep === 'number' && Number.isFinite(pivotStep) && steps.includes(pivotStep)) {
+    return pivotStep;
+  }
+  const target = typeof pivotStep === 'number' && Number.isFinite(pivotStep) ? pivotStep : 60;
+  let best = steps[0];
+  let bestDist = Math.abs(steps[0] - target);
+  for (const step of steps) {
+    const dist = Math.abs(step - target);
+    if (dist < bestDist) {
+      best = step;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+/**
+ * Remap pivot step when the key grid changes (proportional by index / span).
+ * @param {number} pivotStep
+ * @param {number[]} fromSteps
+ * @param {number[]} toSteps
+ * @returns {number}
+ */
+export function remapPivotStep(pivotStep, fromSteps, toSteps) {
+  if (!toSteps.length) return pivotStep;
+  if (!fromSteps.length) return resolvePivotStep(pivotStep, toSteps);
+
+  const fromIdx = fromSteps.indexOf(pivotStep);
+  let t;
+  if (fromIdx >= 0) {
+    t = fromIdx / Math.max(1, fromSteps.length - 1);
+  } else {
+    const a = fromSteps[0];
+    const b = fromSteps[fromSteps.length - 1];
+    t = b > a ? (Number(pivotStep) - a) / (b - a) : 0.5;
+  }
+  const clamped = Math.min(1, Math.max(0, t));
+  return toSteps[Math.round(clamped * (toSteps.length - 1))];
+}
+
+/**
+ * HCT T at the configured pivot step (from that mode's key palette).
+ * @param {Partial<InteractionStatesConfig> | null | undefined} states
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @returns {number}
+ */
+export function resolvePivotTone(states, keyResult, steps) {
+  const step = resolvePivotStep(states?.pivotStep, steps);
+  const tone = keyResult.steps[step]?.tone;
+  return typeof tone === 'number' && Number.isFinite(tone) ? tone : 50;
+}
+
+/**
  * Full LM defaults (strategy + deltas).
+ * @param {number} [stepCount=10]
  * @returns {InteractionStatesConfig}
  */
-export function createDefaultInteractionStates() {
+export function createDefaultInteractionStates(stepCount = 10) {
   return {
     ...createDefaultInteractionDeltas(false),
     relativeChroma: true,
     delivery: 'build',
     space: 'hct',
     oklchGamut: 'srgb',
+    pivotStep: defaultPivotStep(stepCount),
   };
 }
 
@@ -751,16 +824,19 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
  * Stored LM states (config / GUI). Does **not** force runtime overrides —
  * preferences for space / relative / gamut survive delivery toggles.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
+ * @param {number[]} [steps] — when provided, snaps `pivotStep` onto the grid
  * @returns {InteractionStatesConfig}
  */
-export function normalizeStoredInteractionStates(states) {
+export function normalizeStoredInteractionStates(states, steps) {
   const deltas = resolveInteractionDeltas(states, false);
+  const grid = steps?.length ? steps : getSteps(10);
   return {
     ...deltas,
     delivery: states?.delivery === 'runtime' ? 'runtime' : 'build',
     space: states?.space === 'oklch' ? 'oklch' : 'hct',
     relativeChroma: typeof states?.relativeChroma === 'boolean' ? states.relativeChroma : true,
     oklchGamut: states?.oklchGamut === 'p3' ? 'p3' : 'srgb',
+    pivotStep: resolvePivotStep(states?.pivotStep, grid),
   };
 }
 
@@ -768,10 +844,11 @@ export function normalizeStoredInteractionStates(states) {
  * Effective LM states for math / tokens (runtime → OKLCH + relativeChroma off).
  * Does not mutate stored preferences.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
+ * @param {number[]} [steps]
  * @returns {InteractionStatesConfig}
  */
-export function resolveInteractionStates(states) {
-  const stored = normalizeStoredInteractionStates(states);
+export function resolveInteractionStates(states, steps) {
+  const stored = normalizeStoredInteractionStates(states, steps);
   if (stored.delivery !== 'runtime') return stored;
   return {
     ...stored,
@@ -784,11 +861,13 @@ export function resolveInteractionStates(states) {
  * Effective states for a key mode: LM strategy shared; DM overrides only deltas.
  * @param {KeyPaletteState} keyPalette
  * @param {'lm' | 'dm'} mode
+ * @param {number[]} [steps]
  * @returns {InteractionStatesConfig}
  */
-export function resolveModeInteractionStates(keyPalette, mode) {
+export function resolveModeInteractionStates(keyPalette, mode, steps) {
   const lm = resolveInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm?.states),
+    steps,
   );
   if (mode === 'lm') return lm;
   const dmDeltas = resolveInteractionDeltas(
@@ -799,11 +878,11 @@ export function resolveModeInteractionStates(keyPalette, mode) {
 }
 
 /**
- * |ΔL| / |ΔT| from proximity of swatch lightness to bg (surface behind the color).
+ * |ΔT| from proximity of swatch HCT T to bg HCT T.
  * Closer to bg → nearer `deltaMin`; farther → nearer `deltaMax`.
  * @param {number} colorTone
- * @param {number} bgTone — HCT T or OKLCH L of the surface behind the color
- * @param {InteractionStatesConfig} states
+ * @param {number} bgTone
+ * @param {InteractionStatesConfig | InteractionStatesDeltas} states
  * @returns {number}
  */
 export function interactionDeltaMagnitude(colorTone, bgTone, states) {
@@ -814,32 +893,47 @@ export function interactionDeltaMagnitude(colorTone, bgTone, states) {
 }
 
 /**
- * Lightness after interaction state1 (scale 1) or state2 (`state2Scale`).
- * Same pivot/rules for HCT T and OKLCH L (0–100).
- * @param {number} colorTone
- * @param {number} bgTone — lightness of the surface behind the color
- * @param {InteractionStatesConfig} states
- * @param {1 | 2} level
+ * Round interaction Δ to one decimal (build + runtime tokens share this).
+ * @param {number} n
  * @returns {number}
  */
-export function applyInteractionTone(colorTone, bgTone, states, level) {
+export function roundStateDelta(n) {
+  const rounded = Math.round(Number(n) * 10) / 10;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+/**
+ * Next HCT T after interaction (state1 = 1×, state2 = × `state2Scale`).
+ * Direction from `pivotTone`; |Δ| rounded to 1 decimal before apply.
+ * @param {number} colorTone
+ * @param {number} bgTone
+ * @param {InteractionStatesConfig | InteractionStatesDeltas} states
+ * @param {1 | 2} level
+ * @param {number} pivotTone
+ * @returns {number}
+ */
+export function applyInteractionTone(colorTone, bgTone, states, level, pivotTone) {
   const delta = interactionDeltaMagnitude(colorTone, bgTone, states);
   const scale = level === 2 ? Number(states.state2Scale) : 1;
-  const amount = delta * scale;
-  const next = colorTone > INTERACTION_TONE_PIVOT ? colorTone - amount : colorTone + amount;
+  const amount = roundStateDelta(delta * scale);
+  const next = colorTone > pivotTone ? colorTone - amount : colorTone + amount;
   return Math.min(100, Math.max(0, next));
 }
 
 /**
- * Signed ΔL for runtime tokens (`next − current`).
- * @param {number} colorL
- * @param {number} bgL
- * @param {InteractionStatesConfig} states
+ * Signed Δ from HCT T math (`nextT − colorT`), one decimal.
+ * Runtime tokens / OKLCH apply this to L.
+ * @param {number} colorTone
+ * @param {number} bgTone
+ * @param {InteractionStatesConfig | InteractionStatesDeltas} states
  * @param {1 | 2} level
+ * @param {number} pivotTone
  * @returns {number}
  */
-export function interactionLightnessDelta(colorL, bgL, states, level) {
-  return applyInteractionTone(colorL, bgL, states, level) - Number(colorL);
+export function interactionStateDelta(colorTone, bgTone, states, level, pivotTone) {
+  return roundStateDelta(
+    applyInteractionTone(colorTone, bgTone, states, level, pivotTone) - Number(colorTone),
+  );
 }
 
 /**
@@ -847,24 +941,26 @@ export function interactionLightnessDelta(colorL, bgL, states, level) {
  * @returns {string}
  */
 function formatDeltaL(dl) {
-  const rounded = Math.round(dl * 10) / 10;
-  return Object.is(rounded, -0) ? '0' : String(rounded);
+  return String(roundStateDelta(dl));
 }
 
 /**
- * OKLCH path: shift L; optional relative chroma via `/lib/oklch-relative-chroma.mjs`.
- * @param {string} hex
+ * OKLCH delivery: Δ from HCT T math, applied as OKLCH L shift on the hex.
+ * @param {{ hue: number, chroma: number, tone: number, hex?: string }} color
  * @param {string} bgHex
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
+ * @param {number} pivotTone
  * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
  */
-function colorAtInteractionStateOklch(hex, bgHex, states, level) {
+function colorAtInteractionStateOklch(color, bgHex, states, level, pivotTone) {
+  const hex = color.hex || hctToHex(color.hue, color.chroma, color.tone);
+  const bgTone = hexToHct(bgHex).tone;
+  const delta = interactionStateDelta(color.tone, bgTone, states, level, pivotTone);
   const src = hexToOklch(hex);
-  const bgL = hexToOklch(bgHex).l;
-  const nextL = applyInteractionTone(src.l, bgL, states, level);
+  const nextL = Math.min(100, Math.max(0, src.l + delta));
   const out = oklchAtLightness(hex, nextL, {
-    relativeChroma: states.relativeChroma !== false,
+    relativeChroma: states.relativeChroma === true,
     gamut: states.oklchGamut,
   });
   return hexToHct(out.hex);
@@ -872,26 +968,25 @@ function colorAtInteractionStateOklch(hex, bgHex, states, level) {
 
 /**
  * Interaction color for a palette step (not min/max).
- * Build + HCT: shift T, optional HCT relative chroma.
- * Build + OKLCH / runtime: shift OKLCH L (runtime never uses relative chroma).
+ * Math always HCT T (vs bg T, pivot T). Build HCT edits T; OKLCH/runtime applies the same Δ to L.
  * @param {{ hue: number, chroma: number, tone: number, hex?: string }} color
  * @param {string} bgHex — surface behind the color (often key min)
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
+ * @param {number} pivotTone — HCT T at configured pivot step
  * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
  */
-export function colorAtInteractionState(color, bgHex, states, level) {
+export function colorAtInteractionState(color, bgHex, states, level, pivotTone) {
   const cfg = resolveInteractionStates(states);
 
   if (cfg.space === 'oklch') {
-    const hex = color.hex || hctToHex(color.hue, color.chroma, color.tone);
-    return colorAtInteractionStateOklch(hex, bgHex, cfg, level);
+    return colorAtInteractionStateOklch(color, bgHex, cfg, level, pivotTone);
   }
 
   const bgTone = hexToHct(bgHex).tone;
-  const tone = applyInteractionTone(color.tone, bgTone, cfg, level);
+  const tone = applyInteractionTone(color.tone, bgTone, cfg, level, pivotTone);
   const hue = color.hue;
-  const useRelative = cfg.relativeChroma !== false;
+  const useRelative = cfg.relativeChroma === true;
 
   let chroma;
   if (useRelative) {
@@ -1206,11 +1301,36 @@ function remapInterpolatePointsForSteps(points, steps) {
 }
 
 /**
- * Keep interpolate H/C points aligned with the current step grid (mutates state).
+ * Keep interpolate H/C points + LM pivotStep aligned with the current step grid (mutates state).
  * @param {EngineState} state
+ * @param {number} [previousStepCount] — when set, remaps `pivotStep` proportionally from the old grid
  */
-export function normalizeStateForStepCount(state) {
+export function normalizeStateForStepCount(state, previousStepCount) {
   const steps = getSteps(state.stepCount);
+
+  if (
+    typeof previousStepCount === 'number'
+    && Number.isFinite(previousStepCount)
+    && previousStepCount !== state.stepCount
+    && state.keyPalette?.lm?.states
+  ) {
+    const lmStates = /** @type {InteractionStatesConfig} */ (state.keyPalette.lm.states);
+    lmStates.pivotStep = remapPivotStep(
+      lmStates.pivotStep,
+      getSteps(previousStepCount),
+      steps,
+    );
+  }
+
+  if (state.keyPalette?.lm?.states) {
+    Object.assign(
+      state.keyPalette.lm.states,
+      normalizeStoredInteractionStates(
+        /** @type {Partial<InteractionStatesConfig>} */ (state.keyPalette.lm.states),
+        steps,
+      ),
+    );
+  }
 
   for (const palette of state.customPalettes) {
     palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
@@ -1581,6 +1701,7 @@ export function exportEngineConfig(state) {
   const keyPalette = JSON.parse(JSON.stringify(state.keyPalette));
   keyPalette.lm.states = normalizeStoredInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm.states),
+    steps,
   );
   keyPalette.dm.states = resolveInteractionDeltas(
     /** @type {Partial<InteractionStatesDeltas>} */ (keyPalette.dm.states),
@@ -1681,6 +1802,10 @@ export function importEngineConfig(data) {
   };
 
   const steps = getSteps(state.stepCount);
+  state.keyPalette.lm.states = normalizeStoredInteractionStates(
+    /** @type {Partial<InteractionStatesConfig>} */ (state.keyPalette.lm.states),
+    steps,
+  );
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
   for (const palette of state.customPalettes) {
     palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
@@ -1707,19 +1832,27 @@ function parseBrandConfig(raw, customPalettes) {
   if (!raw || typeof raw !== 'object') {
     throw new Error('brand must be an object or omitted');
   }
+  if (!customPalettes.length) return null;
+
   const hex = parseBrandHex(/** @type {{ hex?: unknown }} */ (raw).hex);
   if (!hex) {
     throw new Error('brand.hex must be a hex color (#rrggbb)');
   }
   const perfectFit = Boolean(/** @type {{ perfectFit?: unknown }} */ (raw).perfectFit);
   const paletteRaw = /** @type {{ palette?: unknown }} */ (raw).palette;
-  let paletteName =
-    typeof paletteRaw === 'string' && paletteRaw.trim()
-      ? sanitizePaletteName(paletteRaw)
-      : customPalettes[0]
-        ? sanitizePaletteName(customPalettes[0].name)
-        : 'palette-1';
-  return { hex, perfectFit, palette: paletteName };
+
+  if (typeof paletteRaw === 'string' && paletteRaw.trim()) {
+    const paletteName = sanitizePaletteName(paletteRaw);
+    // Orphan name (typo / deleted palette) → drop brand; never silently remap.
+    if (!customPalettes.some((p) => p.name === paletteName)) return null;
+    return { hex, perfectFit, palette: paletteName };
+  }
+
+  return {
+    hex,
+    perfectFit,
+    palette: sanitizePaletteName(customPalettes[0].name),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1756,44 +1889,45 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
  * @param {string[]} lines
  * @param {InteractionStatesConfig} states
  * @param {string} bgHex
+ * @param {number} pivotTone
  */
-function appendBuildInteractionStateTokens(result, steps, prefix, lines, states, bgHex) {
-  const cfg = resolveInteractionStates(states);
+function appendBuildInteractionStateTokens(result, steps, prefix, lines, states, bgHex, pivotTone) {
+  const cfg = resolveInteractionStates(states, steps);
   for (const step of steps) {
     const data = result.steps[step];
     if (!data) continue;
     const color = {
-      hue: data.hue,
-      chroma: data.chroma,
+      hue: data.hue ?? 0,
+      chroma: data.chroma ?? 0,
       tone: data.tone,
       hex: data.hex,
     };
-    const s1 = colorAtInteractionState(color, bgHex, cfg, 1);
-    const s2 = colorAtInteractionState(color, bgHex, cfg, 2);
+    const s1 = colorAtInteractionState(color, bgHex, cfg, 1, pivotTone);
+    const s2 = colorAtInteractionState(color, bgHex, cfg, 2, pivotTone);
     lines.push(`  --${prefix}-${step}-state1: ${s1.hex};`);
     lines.push(`  --${prefix}-${step}-state2: ${s2.hex};`);
   }
 }
 
 /**
- * Runtime: one shared ΔL set per mode, anchored on key-palette step L (all palettes share the grid).
+ * Runtime: shared Δ tokens per mode from HCT T math (applied as OKLCH L); keyed on key-palette steps.
  * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
  * @param {'lm' | 'dm'} mode
  * @param {string[]} lines
  * @param {InteractionStatesConfig} states
  * @param {string} bgHex
+ * @param {number} pivotTone
  */
-function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex) {
-  const cfg = resolveInteractionStates(states);
-  const bgL = hexToOklch(bgHex).l;
+function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex, pivotTone) {
+  const cfg = resolveInteractionStates(states, steps);
+  const bgTone = hexToHct(bgHex).tone;
   const prefix = mode === 'dm' ? 'state-dm' : 'state';
   for (const step of steps) {
     const data = keyResult.steps[step];
     if (!data) continue;
-    const L = hexToOklch(data.hex).l;
-    lines.push(`  --${prefix}-${step}-state1: ${formatDeltaL(interactionLightnessDelta(L, bgL, cfg, 1))};`);
-    lines.push(`  --${prefix}-${step}-state2: ${formatDeltaL(interactionLightnessDelta(L, bgL, cfg, 2))};`);
+    lines.push(`  --${prefix}-${step}-state1: ${formatDeltaL(interactionStateDelta(data.tone, bgTone, cfg, 1, pivotTone))};`);
+    lines.push(`  --${prefix}-${step}-state2: ${formatDeltaL(interactionStateDelta(data.tone, bgTone, cfg, 2, pivotTone))};`);
   }
 }
 
@@ -1802,7 +1936,7 @@ function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bg
  * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
  * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
- * Runtime: universal `--state-{step}-state1|2` / `--state-dm-…` (ΔL, key-anchored, once).
+ * Runtime: universal `--state-{step}-state1|2` / `--state-dm-…` (Δ from HCT T, applied as OKLCH L; key-step anchored).
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
  * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
@@ -1812,20 +1946,22 @@ function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bg
  */
 export function buildTokensCss(state, keyResults, customResults, steps, endStep) {
   const lines = [];
-  const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm');
-  const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm');
+  const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm', steps);
+  const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm', steps);
   const runtime = lmStates.delivery === 'runtime';
+  const lmPivotTone = resolvePivotTone(lmStates, keyResults.lm, steps);
+  const dmPivotTone = resolvePivotTone(dmStates, keyResults.dm, steps);
 
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
   if (!runtime) {
     appendBuildInteractionStateTokens(
-      keyResults.lm, steps, KEY_PALETTE_NAME, lines, lmStates, keyResults.lm.min,
+      keyResults.lm, steps, KEY_PALETTE_NAME, lines, lmStates, keyResults.lm.min, lmPivotTone,
     );
   }
   appendPaletteColorTokens(keyResults.dm, steps, endStep, `${KEY_PALETTE_NAME}-dm`, lines, 'tone');
   if (!runtime) {
     appendBuildInteractionStateTokens(
-      keyResults.dm, steps, `${KEY_PALETTE_NAME}-dm`, lines, dmStates, keyResults.dm.min,
+      keyResults.dm, steps, `${KEY_PALETTE_NAME}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
     );
   }
 
@@ -1838,13 +1974,13 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
     appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
     if (!runtime) {
       appendBuildInteractionStateTokens(
-        results.lm, published, name, lines, lmStates, keyResults.lm.min,
+        results.lm, published, name, lines, lmStates, keyResults.lm.min, lmPivotTone,
       );
     }
     appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
     if (!runtime) {
       appendBuildInteractionStateTokens(
-        results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min,
+        results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
       );
     }
   }
@@ -1852,15 +1988,15 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   if (runtime) {
     lines.push(
       '',
-      '  /* Runtime interaction states — signed OKLCH ΔL on 0–100 scale (shared across palettes).',
+      '  /* Runtime interaction states — signed Δ from HCT T math, applied as OKLCH L (0–100).',
       '   * CSS relative `l` is 0–1, so divide the token by 100:',
       '   *   background: oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h);',
       '   * LM: --state-{step}-state1|state2',
       '   * DM: --state-dm-{step}-state1|state2',
       '   */',
     );
-    appendRuntimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min);
-    appendRuntimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min);
+    appendRuntimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min, lmPivotTone);
+    appendRuntimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min, dmPivotTone);
   }
 
   return `:root {\n${lines.join('\n')}\n}`;

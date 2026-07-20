@@ -24,7 +24,8 @@
         "relativeChroma": true,
         "delivery": "build",
         "space": "hct",
-        "oklchGamut": "srgb"
+        "oklchGamut": "srgb",
+        "pivotStep": 60
       }
     },
     "dm": {
