@@ -106,11 +106,11 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
-* **`keyPalette.lm|dm.states`** (volitelné; při importu doplní defaulty):
-  * `{ "deltaMin": 5, "deltaMax": 20, "state2Scale": 2, "relativeChroma": true }`
-  * Live interaction math — **nejsou** CSS tokeny
-  * `relativeChroma` — C jako % gamutu při změně T (default `true`)
-  * `bgTone` **není** v configu — volající ho předá do `colorAtInteractionState` (tone povrchu za barvou)
+* **`keyPalette.lm.states`** — plná strategie + LM delty:
+  * `{ "deltaMin", "deltaMax", "state2Scale", "relativeChroma", "delivery", "space", "oklchGamut" }`
+  * `delivery`: `"build"` \| `"realtime"`; `space`: `"hct"` \| `"oklch"`; `oklchGamut`: `"srgb"` \| `"p3"`
+* **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; staré shared klíče se při importu ignorují)
+* `bg` **není** v configu — `bgHex` do `colorAtInteractionState` / `resolveModeInteractionStates`
 
 **Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s clamp on → relative + clamp; s `clampInterpolatedChroma: false` → absolutní C + flag v JSON; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` se exportují s key palette.
 
@@ -128,13 +128,18 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`, `includeSteps: null`) |
 | `moveCustomPalette(state, id, ±1)` | Pořadí custom palet v poli (config) |
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
-| `createDefaultInteractionStates()` | Default `deltaMin` / `deltaMax` / `state2Scale` / `relativeChroma` |
+| `createDefaultInteractionStates()` | LM default: deltas + `delivery: build`, `space: hct`, `oklchGamut: srgb` |
+| `createDefaultInteractionDeltas(forDm?)` | Jen `deltaMin` / `deltaMax` / `state2Scale` (DM default při `true`) |
+| `normalizeStoredInteractionStates(states)` | LM config/GUI shape — **bez** realtime override space/relative |
+| `resolveInteractionStates(states)` | Efektivní LM (realtime → OKLCH + relative off; nemění uložené preference) |
+| `resolveInteractionDeltas(deltas, forDm?)` | Normalizace DM/LM deltas |
+| `resolveModeInteractionStates(keyPalette, mode)` | Efektivní stavy: LM strategy + mode deltas |
 | `importEngineConfig(json)` | JSON → state |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma ve state) |
 | `applyBrandColor(state, hex, opts?)` | Seed z hex → nearest step; volitelně ohýbá LM bezier; nastaví LM H/C brand palety |
 | `normalizeStateForStepCount(state)` | Po změně `state.stepCount` srovná interpolate body + `includeSteps` na novou mřížku. GUI: při Perfect fit pak znovu `applyBrandColor` |
-| `colorAtInteractionState(color, bgTone, states, level)` | Live state1/state2 barva (level `1` \| `2`); `bgTone` = tone povrchu za barvou |
+| `colorAtInteractionState(color, bgHex, states, level)` | state1/state2 barva; `bgHex` = povrch za barvou |
 
 Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`, `INTERACTION_TONE_PIVOT`.
 ### 5.2 Low-level (playground / tooling)
@@ -142,15 +147,15 @@ Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEA
 Headless pipeline je typicky nepotřebuje; `app/` je používá.
 
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
-* **Interaction states:** `interactionDeltaMagnitude`, `applyInteractionTone`, `colorAtInteractionState`  
-  * `bgTone` — HCT tone **za** barvou (kontrastní bg). Playground používá key `min`; produkce dodá tone skutečného underlay.
+* **Interaction states:** `…`, `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`  
+  * Uložené preference (space/relative/gamut) přežijí realtime; math/tokeny berou efektivní resolve.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
 * **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
-* **Tokeny:** `buildTokensCss(state, keyResults, customResults, steps, endStep)` — skládá CSS z **už spočítaných** palet (negeneruje znovu); jen barvy; custom jen `includeSteps`
+* **Tokeny:** `buildTokensCss(...)` — barvy min/steps/max; build = per-palette `state1`/`state2` hex; realtime = univerzální `--state-*-state1|2` / `--state-dm-*` (ΔL, key L)
 * **Jména:** `sanitizePaletteName`, `filterPaletteNameInput`
 
 ---

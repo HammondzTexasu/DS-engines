@@ -8,6 +8,7 @@
  */
 
 import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.mjs';
+import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
 
 /** @typedef {[number, number, number, number]} Bezier */
 /**
@@ -23,13 +24,21 @@ import { Hct, hexFromArgb, argbFromHex } from '../lib/material-color-utilities.m
 /** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean }} InterpolateParam */
 /** @typedef {FixedParam | InterpolateParam} ParamConfig */
 /**
- * Interaction state deltas (live math; not emitted as CSS tokens).
- * `deltaMin`/`deltaMax` — |ΔT| when swatch tone is near / far from `bgTone` (surface behind the color).
- * `state2Scale` — multiplier for state2 vs state1 (GUI: pressed vs hover).
- * `relativeChroma` — keep C as % of HCT gamut when tone shifts (default true).
- * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number, relativeChroma: boolean }} InteractionStatesConfig
+ * Interaction states for palette steps (not min/max).
+ * LM holds full config; DM stores only deltas (`InteractionStatesDeltas`) and inherits
+ * delivery / space / relativeChroma / oklchGamut from LM via `resolveModeInteractionStates`.
+ * `delivery: 'build'` — emit hex `--*-state1` / `--*-state2` (space HCT or OKLCH).
+ * `delivery: 'realtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (ΔL).
+ * `oklchGamut` — used when build + OKLCH + relativeChroma (sRGB / Display P3 max-C).
+ * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesDeltas
+ * @typedef {InteractionStatesDeltas & {
+ *   relativeChroma: boolean,
+ *   delivery: 'build' | 'realtime',
+ *   space: 'hct' | 'oklch',
+ *   oklchGamut: 'srgb' | 'p3',
+ * }} InteractionStatesConfig
  */
-/** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig, interpolatorOverride?: boolean }} KeyPaletteConfig */
+/** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig | InteractionStatesDeltas, interpolatorOverride?: boolean }} KeyPaletteConfig */
 /** @typedef {{ lm: KeyPaletteConfig, dm: KeyPaletteConfig & { interpolatorOverride: boolean } }} KeyPaletteState */
 /**
  * Custom palette. `includeSteps` — whitelist of grid step ids to publish (tokens + GUI).
@@ -627,22 +636,111 @@ export function hexToHct(hex) {
 }
 
 /**
- * @returns {InteractionStatesConfig}
+ * @param {boolean} [forDm=false]
+ * @returns {InteractionStatesDeltas}
  */
-export function createDefaultInteractionStates() {
+export function createDefaultInteractionDeltas(forDm = false) {
   return {
-    deltaMin: DEFAULT_STATE_DELTA_MIN,
-    deltaMax: DEFAULT_STATE_DELTA_MAX,
+    deltaMin: forDm ? DEFAULT_STATE_DELTA_MIN_DM : DEFAULT_STATE_DELTA_MIN,
+    deltaMax: forDm ? DEFAULT_STATE_DELTA_MAX_DM : DEFAULT_STATE_DELTA_MAX,
     state2Scale: DEFAULT_STATE2_SCALE,
-    relativeChroma: true,
   };
 }
 
 /**
- * |ΔT| from proximity of swatch tone to `bgTone` (tone of the surface behind the color).
+ * Full LM defaults (strategy + deltas).
+ * @returns {InteractionStatesConfig}
+ */
+export function createDefaultInteractionStates() {
+  return {
+    ...createDefaultInteractionDeltas(false),
+    relativeChroma: true,
+    delivery: 'build',
+    space: 'hct',
+    oklchGamut: 'srgb',
+  };
+}
+
+/**
+ * Normalize deltas only (DM config shape).
+ * @param {Partial<InteractionStatesDeltas> | null | undefined} deltas
+ * @param {boolean} [forDm=false]
+ * @returns {InteractionStatesDeltas}
+ */
+export function resolveInteractionDeltas(deltas, forDm = false) {
+  const base = createDefaultInteractionDeltas(forDm);
+  const deltaMin = typeof deltas?.deltaMin === 'number' && Number.isFinite(deltas.deltaMin)
+    ? deltas.deltaMin
+    : base.deltaMin;
+  const deltaMax = typeof deltas?.deltaMax === 'number' && Number.isFinite(deltas.deltaMax)
+    ? deltas.deltaMax
+    : base.deltaMax;
+  const state2Scale = typeof deltas?.state2Scale === 'number' && Number.isFinite(deltas.state2Scale)
+    ? deltas.state2Scale
+    : base.state2Scale;
+  return {
+    deltaMin,
+    deltaMax: Math.max(deltaMin, deltaMax),
+    state2Scale,
+  };
+}
+
+/**
+ * Stored LM states (config / GUI). Does **not** force realtime overrides —
+ * preferences for space / relative / gamut survive delivery toggles.
+ * @param {Partial<InteractionStatesConfig> | null | undefined} states
+ * @returns {InteractionStatesConfig}
+ */
+export function normalizeStoredInteractionStates(states) {
+  const deltas = resolveInteractionDeltas(states, false);
+  return {
+    ...deltas,
+    delivery: states?.delivery === 'realtime' ? 'realtime' : 'build',
+    space: states?.space === 'oklch' ? 'oklch' : 'hct',
+    relativeChroma: typeof states?.relativeChroma === 'boolean' ? states.relativeChroma : true,
+    oklchGamut: states?.oklchGamut === 'p3' ? 'p3' : 'srgb',
+  };
+}
+
+/**
+ * Effective LM states for math / tokens (realtime → OKLCH + relativeChroma off).
+ * Does not mutate stored preferences.
+ * @param {Partial<InteractionStatesConfig> | null | undefined} states
+ * @returns {InteractionStatesConfig}
+ */
+export function resolveInteractionStates(states) {
+  const stored = normalizeStoredInteractionStates(states);
+  if (stored.delivery !== 'realtime') return stored;
+  return {
+    ...stored,
+    space: 'oklch',
+    relativeChroma: false,
+  };
+}
+
+/**
+ * Effective states for a key mode: LM strategy shared; DM overrides only deltas.
+ * @param {KeyPaletteState} keyPalette
+ * @param {'lm' | 'dm'} mode
+ * @returns {InteractionStatesConfig}
+ */
+export function resolveModeInteractionStates(keyPalette, mode) {
+  const lm = resolveInteractionStates(
+    /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm?.states),
+  );
+  if (mode === 'lm') return lm;
+  const dmDeltas = resolveInteractionDeltas(
+    /** @type {Partial<InteractionStatesDeltas>} */ (keyPalette.dm?.states),
+    true,
+  );
+  return { ...lm, ...dmDeltas };
+}
+
+/**
+ * |ΔL| / |ΔT| from proximity of swatch lightness to bg (surface behind the color).
  * Closer to bg → nearer `deltaMin`; farther → nearer `deltaMax`.
  * @param {number} colorTone
- * @param {number} bgTone — HCT tone behind the color (often key min / step 0, but any underlay)
+ * @param {number} bgTone — HCT T or OKLCH L of the surface behind the color
  * @param {InteractionStatesConfig} states
  * @returns {number}
  */
@@ -654,9 +752,10 @@ export function interactionDeltaMagnitude(colorTone, bgTone, states) {
 }
 
 /**
- * Tone after interaction state1 (scale 1) or state2 (`state2Scale`).
+ * Lightness after interaction state1 (scale 1) or state2 (`state2Scale`).
+ * Same pivot/rules for HCT T and OKLCH L (0–100).
  * @param {number} colorTone
- * @param {number} bgTone — tone of the surface behind the color
+ * @param {number} bgTone — lightness of the surface behind the color
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
  * @returns {number}
@@ -670,18 +769,67 @@ export function applyInteractionTone(colorTone, bgTone, states, level) {
 }
 
 /**
- * Live interaction color for a palette step (not min/max).
- * Keeps H; shifts T. Chroma: relative % of gamut when `states.relativeChroma` (default), else absolute C + clamp.
- * @param {{ hue: number, chroma: number, tone: number }} color
- * @param {number} bgTone — HCT tone of the surface behind the color (contrast „bg“; often key min / step 0, but any underlay)
+ * Signed ΔL for realtime tokens (`next − current`).
+ * @param {number} colorL
+ * @param {number} bgL
+ * @param {InteractionStatesConfig} states
+ * @param {1 | 2} level
+ * @returns {number}
+ */
+export function interactionLightnessDelta(colorL, bgL, states, level) {
+  return applyInteractionTone(colorL, bgL, states, level) - Number(colorL);
+}
+
+/**
+ * @param {number} dl
+ * @returns {string}
+ */
+function formatDeltaL(dl) {
+  const rounded = Math.round(dl * 10) / 10;
+  return Object.is(rounded, -0) ? '0' : String(rounded);
+}
+
+/**
+ * OKLCH path: shift L; optional relative chroma via `/lib/oklch-relative-chroma.mjs`.
+ * @param {string} hex
+ * @param {string} bgHex
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
  * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
  */
-export function colorAtInteractionState(color, bgTone, states, level) {
-  const tone = applyInteractionTone(color.tone, bgTone, states, level);
+function colorAtInteractionStateOklch(hex, bgHex, states, level) {
+  const src = hexToOklch(hex);
+  const bgL = hexToOklch(bgHex).l;
+  const nextL = applyInteractionTone(src.l, bgL, states, level);
+  const out = oklchAtLightness(hex, nextL, {
+    relativeChroma: states.relativeChroma !== false,
+    gamut: states.oklchGamut,
+  });
+  return hexToHct(out.hex);
+}
+
+/**
+ * Interaction color for a palette step (not min/max).
+ * Build + HCT: shift T, optional HCT relative chroma.
+ * Build + OKLCH / realtime: shift OKLCH L (realtime never uses relative chroma).
+ * @param {{ hue: number, chroma: number, tone: number, hex?: string }} color
+ * @param {string} bgHex — surface behind the color (often key min)
+ * @param {InteractionStatesConfig} states
+ * @param {1 | 2} level
+ * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
+ */
+export function colorAtInteractionState(color, bgHex, states, level) {
+  const cfg = resolveInteractionStates(states);
+
+  if (cfg.space === 'oklch') {
+    const hex = color.hex || hctToHex(color.hue, color.chroma, color.tone);
+    return colorAtInteractionStateOklch(hex, bgHex, cfg, level);
+  }
+
+  const bgTone = hexToHct(bgHex).tone;
+  const tone = applyInteractionTone(color.tone, bgTone, cfg, level);
   const hue = color.hue;
-  const useRelative = states.relativeChroma !== false;
+  const useRelative = cfg.relativeChroma !== false;
 
   let chroma;
   if (useRelative) {
@@ -1068,11 +1216,7 @@ export function createDefaultKeyPalette() {
       end: { tone: 93 },
       interpolator: [0.32, 0.23, 0.68, 0.82],
       interpolatorOverride: false,
-      states: {
-        ...createDefaultInteractionStates(),
-        deltaMin: DEFAULT_STATE_DELTA_MIN_DM,
-        deltaMax: DEFAULT_STATE_DELTA_MAX_DM,
-      },
+      states: createDefaultInteractionDeltas(true),
     },
   };
 }
@@ -1241,37 +1385,50 @@ function parseInteractionStates(value, label) {
     throw new Error(`Invalid ${label}`);
   }
 
-  const deltaMin = typeof value.deltaMin === 'number' && Number.isFinite(value.deltaMin)
-    ? value.deltaMin
-    : DEFAULT_STATE_DELTA_MIN;
-  const deltaMax = typeof value.deltaMax === 'number' && Number.isFinite(value.deltaMax)
-    ? value.deltaMax
-    : DEFAULT_STATE_DELTA_MAX;
-  const state2Scale = typeof value.state2Scale === 'number' && Number.isFinite(value.state2Scale)
-    ? value.state2Scale
-    : DEFAULT_STATE2_SCALE;
-  const relativeChroma = typeof value.relativeChroma === 'boolean'
-    ? value.relativeChroma
-    : true;
+  const parsed = normalizeStoredInteractionStates(
+    /** @type {Partial<InteractionStatesConfig>} */ (value),
+  );
 
-  if (deltaMin < 0 || deltaMax < 0 || state2Scale < 0) {
+  if (parsed.deltaMin < 0 || parsed.deltaMax < 0 || parsed.state2Scale < 0) {
     throw new Error(`${label} values must be non-negative`);
   }
 
-  return {
-    deltaMin,
-    deltaMax: Math.max(deltaMin, deltaMax),
-    state2Scale,
-    relativeChroma,
-  };
+  return parsed;
+}
+
+/**
+ * DM states: only deltas (shared strategy lives on LM). Extra keys ignored.
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {InteractionStatesDeltas}
+ */
+function parseInteractionStatesDeltas(value, label) {
+  if (value == null) {
+    return createDefaultInteractionDeltas(true);
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Invalid ${label}`);
+  }
+
+  const parsed = resolveInteractionDeltas(
+    /** @type {Partial<InteractionStatesDeltas>} */ (value),
+    true,
+  );
+
+  if (parsed.deltaMin < 0 || parsed.deltaMax < 0 || parsed.state2Scale < 0) {
+    throw new Error(`${label} values must be non-negative`);
+  }
+
+  return parsed;
 }
 
 /**
  * @param {unknown} value
  * @param {string} label
+ * @param {boolean} [forDm=false]
  * @returns {KeyPaletteConfig}
  */
-function parseKeyPaletteMode(value, label) {
+function parseKeyPaletteMode(value, label, forDm = false) {
   if (!value || typeof value !== 'object') {
     throw new Error(`Invalid ${label}`);
   }
@@ -1283,7 +1440,9 @@ function parseKeyPaletteMode(value, label) {
     start: { tone: parseTone(value.start?.tone, `${label}.start.tone`) },
     end: { tone: parseTone(value.end?.tone, `${label}.end.tone`) },
     interpolator: parseBezier(value.interpolator, `${label}.interpolator`),
-    states: parseInteractionStates(value.states, `${label}.states`),
+    states: forDm
+      ? parseInteractionStatesDeltas(value.states, `${label}.states`)
+      : parseInteractionStates(value.states, `${label}.states`),
   };
 
   if ('interpolatorOverride' in value) {
@@ -1356,10 +1515,19 @@ export function exportEngineConfig(state) {
   const steps = getSteps(state.stepCount);
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
 
+  const keyPalette = JSON.parse(JSON.stringify(state.keyPalette));
+  keyPalette.lm.states = normalizeStoredInteractionStates(
+    /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm.states),
+  );
+  keyPalette.dm.states = resolveInteractionDeltas(
+    /** @type {Partial<InteractionStatesDeltas>} */ (keyPalette.dm.states),
+    true,
+  );
+
   return {
     version: ENGINE_CONFIG_VERSION,
     stepCount: state.stepCount,
-    keyPalette: JSON.parse(JSON.stringify(state.keyPalette)),
+    keyPalette,
     customPalettes: state.customPalettes.map(({ name, includeSteps, lm, dm }) => {
       const published = resolveIncludeSteps(includeSteps, steps);
       const normalized = normalizeIncludeSteps(includeSteps, steps);
@@ -1401,9 +1569,9 @@ export function importEngineConfig(data) {
   }
 
   const keyPalette = {
-    lm: parseKeyPaletteMode(data.keyPalette.lm, 'keyPalette.lm'),
+    lm: parseKeyPaletteMode(data.keyPalette.lm, 'keyPalette.lm', false),
     dm: {
-      ...parseKeyPaletteMode(data.keyPalette.dm, 'keyPalette.dm'),
+      ...parseKeyPaletteMode(data.keyPalette.dm, 'keyPalette.dm', true),
       interpolatorOverride: Boolean(data.keyPalette.dm?.interpolatorOverride),
     },
   };
@@ -1477,10 +1645,60 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
 }
 
 /**
- * Build `:root { … }` CSS custom properties — **colors only** (min / steps / max).
+ * Emit build-time hex state1/state2 for published steps (not min/max).
+ * @param {ReturnType<typeof generateKeyPalette>} result
+ * @param {number[]} steps
+ * @param {string} prefix
+ * @param {string[]} lines
+ * @param {InteractionStatesConfig} states
+ * @param {string} bgHex
+ */
+function appendBuildInteractionStateTokens(result, steps, prefix, lines, states, bgHex) {
+  const cfg = resolveInteractionStates(states);
+  for (const step of steps) {
+    const data = result.steps[step];
+    if (!data) continue;
+    const color = {
+      hue: data.hue,
+      chroma: data.chroma,
+      tone: data.tone,
+      hex: data.hex,
+    };
+    const s1 = colorAtInteractionState(color, bgHex, cfg, 1);
+    const s2 = colorAtInteractionState(color, bgHex, cfg, 2);
+    lines.push(`  --${prefix}-${step}-state1: ${s1.hex};`);
+    lines.push(`  --${prefix}-${step}-state2: ${s2.hex};`);
+  }
+}
+
+/**
+ * Realtime: one shared ΔL set per mode, anchored on key-palette step L (all palettes share the grid).
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {'lm' | 'dm'} mode
+ * @param {string[]} lines
+ * @param {InteractionStatesConfig} states
+ * @param {string} bgHex
+ */
+function appendRealtimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex) {
+  const cfg = resolveInteractionStates(states);
+  const bgL = hexToOklch(bgHex).l;
+  const prefix = mode === 'dm' ? 'state-dm' : 'state';
+  for (const step of steps) {
+    const data = keyResult.steps[step];
+    if (!data) continue;
+    const L = hexToOklch(data.hex).l;
+    lines.push(`  --${prefix}-${step}-state1: ${formatDeltaL(interactionLightnessDelta(L, bgL, cfg, 1))};`);
+    lines.push(`  --${prefix}-${step}-state2: ${formatDeltaL(interactionLightnessDelta(L, bgL, cfg, 2))};`);
+  }
+}
+
+/**
+ * Build `:root { … }` CSS custom properties — **colors only** (min / steps / max + interaction states).
  * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
  * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
+ * Realtime: universal `--state-{step}-state1|2` / `--state-dm-…` (ΔL, key-anchored, once).
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
  * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
@@ -1490,9 +1708,22 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
  */
 export function buildTokensCss(state, keyResults, customResults, steps, endStep) {
   const lines = [];
+  const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm');
+  const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm');
+  const realtime = lmStates.delivery === 'realtime';
 
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
+  if (!realtime) {
+    appendBuildInteractionStateTokens(
+      keyResults.lm, steps, KEY_PALETTE_NAME, lines, lmStates, keyResults.lm.min,
+    );
+  }
   appendPaletteColorTokens(keyResults.dm, steps, endStep, `${KEY_PALETTE_NAME}-dm`, lines, 'tone');
+  if (!realtime) {
+    appendBuildInteractionStateTokens(
+      keyResults.dm, steps, `${KEY_PALETTE_NAME}-dm`, lines, dmStates, keyResults.dm.min,
+    );
+  }
 
   for (const palette of state.customPalettes) {
     const name = sanitizePaletteName(palette.name);
@@ -1501,7 +1732,31 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
 
     const published = resolveIncludeSteps(palette.includeSteps, steps);
     appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
+    if (!realtime) {
+      appendBuildInteractionStateTokens(
+        results.lm, published, name, lines, lmStates, keyResults.lm.min,
+      );
+    }
     appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
+    if (!realtime) {
+      appendBuildInteractionStateTokens(
+        results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min,
+      );
+    }
+  }
+
+  if (realtime) {
+    lines.push(
+      '',
+      '  /* Realtime interaction states — signed OKLCH ΔL on 0–100 scale (shared across palettes).',
+      '   * CSS relative `l` is 0–1, so divide the token by 100:',
+      '   *   background: oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h);',
+      '   * LM: --state-{step}-state1|state2',
+      '   * DM: --state-dm-{step}-state1|state2',
+      '   */',
+    );
+    appendRealtimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min);
+    appendRealtimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min);
   }
 
   return `:root {\n${lines.join('\n')}\n}`;

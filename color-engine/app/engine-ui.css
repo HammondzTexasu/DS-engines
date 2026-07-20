@@ -131,7 +131,7 @@ legend {
   cursor: default;
   overflow: visible;
   /* Fallback when contrast-color() is unavailable (JS may set inline color). */
-  color: #111;
+  color: #000;
 }
 
 @supports (color: contrast-color(red)) {
@@ -518,6 +518,15 @@ input[type='range']:focus-visible::-moz-range-thumb {
 }
 
 .control-group--step select {
+  width: 100%;
+}
+
+.control-group--select {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+.control-group--select select {
   width: 100%;
 }
 

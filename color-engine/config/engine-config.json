@@ -21,7 +21,10 @@
         "deltaMin": 5,
         "deltaMax": 20,
         "state2Scale": 2,
-        "relativeChroma": true
+        "relativeChroma": true,
+        "delivery": "build",
+        "space": "hct",
+        "oklchGamut": "srgb"
       }
     },
     "dm": {
@@ -43,8 +46,7 @@
       "states": {
         "deltaMin": 8,
         "deltaMax": 15,
-        "state2Scale": 2,
-        "relativeChroma": true
+        "state2Scale": 2
       }
     }
   },

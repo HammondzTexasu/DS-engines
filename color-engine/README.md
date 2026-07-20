@@ -78,14 +78,25 @@ Jednorázové založení škály z konkrétní barvy (headless i GUI). **Brand h
 * API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`.
 * **GUI:** při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje (nová mřížka → nový nearest step / `t`). Bez Perfect fit není potřeba — H/C brandu na `stepCount` nezávisí.
 
-## 5. Interaction states (delta T)
+## 5. Interaction states (delta L / T)
 
-Live math pro stavy na **krocích palety** (ne `min`/`max`). Do CSS tokenů se **nezapisuje**.
+Stavy na **krocích palety** (ne `min`/`max`).
 
-* **`bgTone`** = HCT tone **povrchu za barvou** (kontrastní „bg“ vůči swatchi). Často je to krok `0` (`min`), ale může to být libovolný underlay (karta, overlay, jiný token) — engine ho jen dostane jako číslo.
-* `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (default LM min 5 / max 20; DM min 8 / max 15).
-* Směr: T > 50 → ztmavit; jinak zesvětlit.
-* **state1** = 1× delta (GUI: hover); **state2** = delta × `state2Scale` (default 2, GUI: pressed).
-* **relativeChroma** (default zapnuto): při posunu T drží C jako % HCT gamutu (stejný princip jako u interpolate chroma); vypnuto = absolutní C + clamp.
-* Nastavení je v configu u `keyPalette.lm.states` / `keyPalette.dm.states`.
-* **Playground (`app/`):** demo předává `bgTone` z key `min` (page surface). V produkci dodá volající tone skutečného podkladu pod prvkem.
+* **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`
+* **Per mode deltas:** `deltaMin` / `deltaMax` / `state2Scale` — LM i DM (DM config má jen tyto tři)
+* **`bg`** = povrch za barvou (playground: key `min`)
+* `|Δ| = deltaMin + (|L − L_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15)
+* Směr: L/T > 50 → ztmavit; jinak zesvětlit. **state1** = 1×; **state2** = × `state2Scale`
+
+### Delivery
+
+| `delivery` | Space | Relative chroma | CSS tokeny |
+| :--- | :--- | :--- | :--- |
+| **`build`** (default) | `hct` nebo `oklch` | volitelně | `--{prefix}-{step}-state1` / `state2` (hex) |
+| **`realtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (ΔL; kotva = key L; nezávislé na počtu palet) |
+
+* Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: realtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
+* Realtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token ΔL je 0–100, CSS `l` je 0–1.
+* Playground realtime hover/pressed používá stejný CSS zápis (tokeny injektované do DOM); build zůstává u JS hex.
+* Playground: hover/pressed přepíše label na `T:` (HCT) nebo `L:` (OKLCH / realtime) podle vykreslené barvy.
+* API: `resolveModeInteractionStates(keyPalette, mode)`, `colorAtInteractionState(color, bgHex, states, level)`.
