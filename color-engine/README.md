@@ -70,13 +70,22 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 
 ## 4b. Brand color (seed)
 
-Jednorázové založení škály z konkrétní barvy (headless i GUI). **Brand hex se do configu neukládá** — výsledkem jsou upravené LM tony / H·C.
+Založení škály z konkrétní barvy (headless i GUI). Seed se ukládá do configu jako `brand` (sdílení / import).
+
+```json
+"brand": {
+  "hex": "#cc0000",
+  "perfectFit": true,
+  "palette": "palette-1"
+}
+```
 
 * Najde key krok s tone nejbližším seed T.
-* **`perfectFit: false`:** jen nastaví LM hue + chroma u brand custom palety (podle `paletteId`, default první).
-* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T. DM zůstává default (invert LM, pokud není override).
-* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`.
-* **GUI:** při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje (nová mřížka → nový nearest step / `t`). Bez Perfect fit není potřeba — H/C brandu na `stepCount` nezávisí.
+* **`perfectFit: false`:** jen nastaví LM hue + chroma u brand custom palety (podle `paletteId` / jména `palette`, default první). Override hexu se neaplikuje.
+* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T, a při `generateSystem` **vynutí seed hex 1:1** na tom LM kroku (runtime override — křivka + HCT zaokrouhlení jinak hex mírně posunou). DM zůstává default (invert LM, pokud není override).
+* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`, `clearBrandConfig(state)`, `applyBrandStepOverride` (volá `generateSystem`).
+* Import jen obnoví `state.brand` (křivka + H/C už jsou v configu); hex override běží při generování.
+* **GUI:** link zrcadlí `state.brand`; při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje. Ruční edit LM H/C brand palety / smazání linku → `brand` z configu pryč.
 
 ## 5. Interaction states (delta L / T)
 

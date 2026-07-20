@@ -45,7 +45,11 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * `null` / omitted / full grid = all key steps. Never includes min/max.
  * @typedef {{ name: string, includeSteps: number[] | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig } }} CustomPaletteConfig
  */
-/** @typedef {{ stepCount: number, keyPalette: KeyPaletteState, customPalettes: Array<CustomPaletteConfig & { id: string }> }} EngineState */
+/**
+ * Optional brand seed (shared in config). With perfectFit, generateSystem forces seed hex on that LM step.
+ * @typedef {{ hex: string, perfectFit: boolean, palette: string }} BrandConfig
+ */
+/** @typedef {{ stepCount: number, keyPalette: KeyPaletteState, customPalettes: Array<CustomPaletteConfig & { id: string }>, brand: BrandConfig | null }} EngineState */
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -425,7 +429,7 @@ export function parseBrandHex(raw) {
  * - Picks the key step whose tone is nearest to the brand tone.
  * - `perfectFit`: bend LM key tone interpolator (minimal drift from current curve) so that step gets brand T.
  * - Sets brand custom palette LM hue/chroma to brand H/C. DM params untouched.
- * Brand hex is not stored in config — caller keeps any UI “linked” state.
+ * - Writes `state.brand` for config export / Perfect-fit hex override in `generateSystem`.
  *
  * @param {EngineState} state
  * @param {string} hex — `#rrggbb` or `rrggbb`
@@ -479,6 +483,12 @@ export function applyBrandColor(state, hex, options = {}) {
   palette.lm.hue = createFixedParam(hct.hue);
   palette.lm.chroma = createFixedParam(hct.chroma);
 
+  state.brand = {
+    hex: normalized,
+    perfectFit,
+    palette: palette.name,
+  };
+
   return {
     hex: normalized,
     step,
@@ -487,6 +497,58 @@ export function applyBrandColor(state, hex, options = {}) {
     chroma: hct.chroma,
     tone: hct.tone,
   };
+}
+
+/**
+ * Clear persisted brand seed (config + Perfect-fit override).
+ * @param {EngineState} state
+ */
+export function clearBrandConfig(state) {
+  state.brand = null;
+}
+
+/**
+ * @param {EngineState} state
+ * @returns {(CustomPaletteConfig & { id: string }) | null}
+ */
+export function resolveBrandPalette(state) {
+  if (!state.brand || !state.customPalettes.length) return null;
+  const name = sanitizePaletteName(state.brand.palette);
+  return state.customPalettes.find((p) => p.name === name) || state.customPalettes[0] || null;
+}
+
+/**
+ * After palette generate: with Perfect fit, force seed hex on the brand LM step (1:1).
+ * Mutates `customResults` only. Not written as a separate config field — derived from `state.brand`.
+ * @param {EngineState} state
+ * @param {ReturnType<typeof generateKeyPalettes>} keyResults
+ * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
+ * @returns {number | null} overridden step id, or null
+ */
+export function applyBrandStepOverride(state, keyResults, customResults) {
+  if (!state.brand?.perfectFit) return null;
+  const hex = parseBrandHex(state.brand.hex);
+  if (!hex) return null;
+
+  const palette = resolveBrandPalette(state);
+  if (!palette) return null;
+  const results = customResults[palette.id];
+  if (!results?.lm?.steps) return null;
+
+  const steps = getSteps(state.stepCount);
+  const hct = hexToHct(hex);
+  const step = nearestStepForTone(keyResults.lm, steps, hct.tone);
+  const data = results.lm.steps[step];
+  if (!data) return null;
+
+  results.lm.steps[step] = {
+    ...data,
+    hex,
+    hue: hct.hue,
+    chroma: hct.chroma,
+    tone: hct.tone,
+  };
+  return step;
 }
 
 /**
@@ -1269,6 +1331,7 @@ export function createDefaultState() {
     stepCount: 10,
     keyPalette: createDefaultKeyPalette(),
     customPalettes: [createCustomPalette()],
+    brand: null,
   };
 }
 
@@ -1524,7 +1587,8 @@ export function exportEngineConfig(state) {
     true,
   );
 
-  return {
+  /** @type {{ version: number, stepCount: number, keyPalette: unknown, customPalettes: unknown[], brand?: BrandConfig }} */
+  const out = {
     version: ENGINE_CONFIG_VERSION,
     stepCount: state.stepCount,
     keyPalette,
@@ -1532,15 +1596,28 @@ export function exportEngineConfig(state) {
       const published = resolveIncludeSteps(includeSteps, steps);
       const normalized = normalizeIncludeSteps(includeSteps, steps);
       /** @type {{ name: string, includeSteps?: number[], lm: unknown, dm: unknown }} */
-      const out = {
+      const paletteOut = {
         name: sanitizePaletteName(name),
         lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps, published),
         dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps, published),
       };
-      if (normalized) out.includeSteps = normalized;
-      return out;
+      if (normalized) paletteOut.includeSteps = normalized;
+      return paletteOut;
     }),
   };
+
+  if (state.brand) {
+    const hex = parseBrandHex(state.brand.hex);
+    if (hex) {
+      out.brand = {
+        hex,
+        perfectFit: Boolean(state.brand.perfectFit),
+        palette: sanitizePaletteName(state.brand.palette),
+      };
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -1600,6 +1677,7 @@ export function importEngineConfig(data) {
     stepCount: Math.max(1, Math.round(data.stepCount)),
     keyPalette,
     customPalettes,
+    brand: null,
   };
 
   const steps = getSteps(state.stepCount);
@@ -1615,7 +1693,36 @@ export function importEngineConfig(data) {
     }
   }
 
+  state.brand = parseBrandConfig(data.brand, state.customPalettes);
   return state;
+}
+
+/**
+ * @param {unknown} raw
+ * @param {Array<CustomPaletteConfig & { id: string }>} customPalettes
+ * @returns {BrandConfig | null}
+ */
+function parseBrandConfig(raw, customPalettes) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('brand must be an object or omitted');
+  }
+  const hex = parseBrandHex(/** @type {{ hex?: unknown }} */ (raw).hex);
+  if (!hex) {
+    throw new Error('brand.hex must be a hex color (#rrggbb)');
+  }
+  const perfectFit = Boolean(/** @type {{ perfectFit?: unknown }} */ (raw).perfectFit);
+  const paletteRaw = /** @type {{ palette?: unknown }} */ (raw).palette;
+  let paletteName =
+    typeof paletteRaw === 'string' && paletteRaw.trim()
+      ? sanitizePaletteName(paletteRaw)
+      : customPalettes[0]
+        ? sanitizePaletteName(customPalettes[0].name)
+        : 'palette-1';
+  if (customPalettes.length && !customPalettes.some((p) => p.name === paletteName)) {
+    paletteName = sanitizePaletteName(customPalettes[0].name);
+  }
+  return { hex, perfectFit, palette: paletteName };
 }
 
 // ---------------------------------------------------------------------------
@@ -1786,6 +1893,8 @@ export function generateSystem(state) {
       dm: generateCustomPaletteForMode(palette, 'dm', keyPalettes.dm, steps),
     };
   }
+
+  applyBrandStepOverride(state, keyPalettes, customPalettes);
 
   return {
     steps,

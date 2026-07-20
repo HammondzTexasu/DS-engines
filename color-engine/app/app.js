@@ -1,7 +1,6 @@
 import {
   invertBezier,
   generateKeyPalettes,
-  generateCustomPaletteForMode,
   sanitizePaletteName,
   filterPaletteNameInput,
   formatBezierCss,
@@ -44,6 +43,8 @@ import {
   isSingleIncludeStep,
   applyRelativeFixedChromaAtStep,
   applyBrandColor,
+  clearBrandConfig,
+  resolveBrandPalette,
   parseBrandHex,
 } from '../src/color-engine.js';
 import { hexToOklch } from '../lib/oklch-relative-chroma.mjs';
@@ -73,13 +74,29 @@ async function loadInitialState() {
 let pendingConfigStatus = null;
 
 /**
- * GUI-only brand seed link (not part of engine config).
+ * GUI mirror of `state.brand` (palette resolved by runtime id).
  * @type {{ hex: string, paletteId: string } | null}
  */
 let brandLink = null;
 
-/** Perfect fit toggle (bend LM key curve). Persists in GUI session only. */
+/** Perfect fit toggle — kept in sync with `state.brand.perfectFit` when linked. */
 let brandPerfectFit = false;
+
+/**
+ * Sync GUI brand controls from `state.brand` (import / boot).
+ */
+function syncBrandUiFromState() {
+  if (!state.brand) {
+    brandLink = null;
+    brandPerfectFit = false;
+    return;
+  }
+  brandPerfectFit = Boolean(state.brand.perfectFit);
+  const palette = resolveBrandPalette(state);
+  brandLink = palette
+    ? { hex: state.brand.hex, paletteId: palette.id }
+    : null;
+}
 
 let pageDarkMode = false;
 
@@ -422,12 +439,62 @@ function createCollapsePanel(title, panelName, body, expanded = false) {
  */
 function createTokensPanelBody(text) {
   const body = document.createElement('div');
+  body.className = 'config-panel-body';
+
+  const status = document.createElement('div');
+  status.className = 'config-status';
+  status.setAttribute('aria-live', 'polite');
+
+  /** @param {string} message @param {boolean} [isError] */
+  const setStatus = (message, isError = false) => {
+    status.textContent = message;
+    status.classList.toggle('is-error', isError);
+  };
 
   const output = document.createElement('pre');
   output.className = 'code-output';
   output.textContent = text;
   body.appendChild(output);
 
+  const actions = document.createElement('div');
+  actions.className = 'config-actions';
+
+  const currentCss = () =>
+    output.textContent || generateSystem(state).tokensCss;
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.type = 'button';
+  downloadBtn.className = 'palette-header-action';
+  downloadBtn.textContent = 'Download CSS';
+  downloadBtn.addEventListener('click', () => {
+    const css = currentCss();
+    const blob = new Blob([css], { type: 'text/css' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'color-engine-tokens.css';
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatus('Tokens downloaded.');
+  });
+  actions.appendChild(downloadBtn);
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'palette-header-action';
+  copyBtn.textContent = 'Copy CSS';
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(currentCss());
+      setStatus('Tokens copied to clipboard.');
+    } catch {
+      setStatus('Could not copy to clipboard.', true);
+    }
+  });
+  actions.appendChild(copyBtn);
+
+  body.appendChild(actions);
+  body.appendChild(status);
   return body;
 }
 
@@ -435,15 +502,20 @@ function applyImportedConfig(raw) {
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
   state = importEngineConfig(parsed);
   hctPickerMemory.clear();
-  brandLink = null;
+  syncBrandUiFromState();
   render();
 }
 
 /**
- * Clear GUI brand seed link (config values may have been edited by hand).
+ * Clear brand seed link (GUI + `state.brand`). Config H/C / curve may stay as last edited.
  */
 function clearBrandLink() {
-  if (!brandLink) return;
+  clearBrandConfig(state);
+  if (!brandLink) {
+    const empty = app?.querySelector('.ui-control--brand-hex');
+    if (empty instanceof HTMLInputElement) empty.value = '';
+    return;
+  }
   brandLink = null;
   const input = app?.querySelector('.ui-control--brand-hex');
   if (input instanceof HTMLInputElement) {
@@ -596,7 +668,7 @@ function render() {
   const configPanelExpanded = collectCollapsePanelExpanded('config');
 
   const system = generateSystem(state);
-  const { steps, endStep, keyPalettes: keyResults, tokensCss } = system;
+  const { steps, endStep, keyPalettes: keyResults, customPalettes, tokensCss } = system;
 
   app.innerHTML = '';
 
@@ -610,7 +682,14 @@ function render() {
   app.appendChild(createKeyPaletteFieldset(keyResults, steps, endStep, expandedParamGroups));
 
   for (const palette of state.customPalettes) {
-    app.appendChild(createCustomPaletteFieldset(palette, keyResults, steps, endStep, expandedParamGroups));
+    app.appendChild(createCustomPaletteFieldset(
+      palette,
+      keyResults,
+      customPalettes[palette.id],
+      steps,
+      endStep,
+      expandedParamGroups,
+    ));
   }
 
   const addWrap = document.createElement('div');
@@ -1346,14 +1425,14 @@ function createKeyPaletteTitle() {
 }
 
 /**
- * Brand hex input + Perfect fit toggle (GUI-only link; engine applyBrandColor).
+ * Brand hex input + Perfect fit toggle (`state.brand` + applyBrandColor).
  */
 function createBrandColorControl() {
   const group = document.createElement('div');
   group.className = 'control-group steps-control brand-color-control';
 
-  const brandHint = 'Your brand seed color. Applies LM hue/chroma to the linked custom palette (defaults to the first one). With Perfect fit it also bends the key tone curve just enough so a grid step matches this tone.';
-  const perfectFitHint = 'Bend the LM key tone curve just enough so a grid step matches this brand’s tone. Brand color wins; the palette changes as little as possible.';
+  const brandHint = 'Your brand seed color. Applies LM hue/chroma to the linked custom palette (defaults to the first one). Stored in config for sharing. With Perfect fit it also bends the key tone curve and forces that step’s hex to match the seed 1:1.';
+  const perfectFitHint = 'Bend the LM key tone curve just enough so a grid step matches this brand’s tone, then force that step’s hex to the seed (1:1). Brand color wins; the palette changes as little as possible.';
 
   const input = document.createElement('input');
   input.type = 'text';
@@ -1368,8 +1447,8 @@ function createBrandColorControl() {
   const commit = () => {
     const raw = input.value.trim();
     if (!raw) {
-      brandLink = null;
-      input.value = '';
+      clearBrandLink();
+      scheduleRefreshPreviews();
       return;
     }
     const hex = parseBrandHex(raw);
@@ -1716,11 +1795,22 @@ function commitPaletteNameInput(titleInput, palette, fs) {
   const next = sanitizePaletteName(titleInput.value);
   titleInput.value = next;
   palette.name = next;
+  if (state.brand && brandLink?.paletteId === palette.id) {
+    state.brand.palette = next;
+  }
   updatePaletteNameLabels(fs, next);
   scheduleRefreshPreviews();
 }
 
-function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expandedParamGroups = new Set()) {
+/**
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {ReturnType<typeof generateKeyPalettes>} keyResults
+ * @param {ReturnType<typeof generateSystem>['customPalettes'][string]} paletteResults — from `generateSystem` (includes brand override)
+ * @param {number[]} steps
+ * @param {number} endStep
+ * @param {Set<string>} [expandedParamGroups]
+ */
+function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps, endStep, expandedParamGroups = new Set()) {
   const fs = document.createElement('fieldset');
   fs.className = 'custom-palette-fieldset';
   fs.dataset.paletteId = palette.id;
@@ -1761,7 +1851,7 @@ function createCustomPaletteFieldset(palette, keyResults, steps, endStep, expand
 
   for (const mode of /** @type {const} */ (['lm', 'dm'])) {
     const keyResult = keyResults[mode];
-    const customResult = generateCustomPaletteForMode(palette, mode, keyResult, steps);
+    const customResult = paletteResults[mode];
     const modeLabel = formatPaletteModeLabel(tokenName, mode);
     const suffix = mode === 'dm' ? '-dm' : '';
 
@@ -3643,6 +3733,7 @@ function createBezierInputs(bezier, onChange, options = {}) {
 async function boot() {
   try {
     state = await loadInitialState();
+    syncBrandUiFromState();
     render();
   } catch (err) {
     showError(err);

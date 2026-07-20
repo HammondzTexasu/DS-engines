@@ -137,7 +137,9 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `importEngineConfig(json)` | JSON → state |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma ve state) |
-| `applyBrandColor(state, hex, opts?)` | Seed z hex → nearest step; volitelně ohýbá LM bezier; nastaví LM H/C brand palety |
+| `applyBrandColor(state, hex, opts?)` | Seed z hex → nearest step; volitelně ohýbá LM bezier; nastaví LM H/C brand palety; zapíše `state.brand` |
+| `clearBrandConfig(state)` | Smaže `state.brand` (export už brand nemá) |
+| `applyBrandStepOverride(state, key, custom)` | Při `perfectFit` vynutí seed hex na LM kroku (volá `generateSystem`) |
 | `normalizeStateForStepCount(state)` | Po změně `state.stepCount` srovná interpolate body + `includeSteps` na novou mřížku. GUI: při Perfect fit pak znovu `applyBrandColor` |
 | `colorAtInteractionState(color, bgHex, states, level)` | state1/state2 barva; `bgHex` = povrch za barvou |
 
@@ -153,7 +155,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
-* **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`
+* **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`, `applyBrandStepOverride`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
 * **Tokeny:** `buildTokensCss(...)` — barvy min/steps/max; build = per-palette `state1`/`state2` hex; realtime = univerzální `--state-*-state1|2` / `--state-dm-*` (ΔL, key L)
 * **Jména:** `sanitizePaletteName`, `filterPaletteNameInput`
@@ -168,7 +170,8 @@ Pořadí uvnitř:
 2. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
 3. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (při clamp on).
 4. Spočítá custom palety (LM/DM) na **plné** mřížce (mezikroky: clamp on → `clampChroma`; clamp off → raw interpolované C).
-5. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig`.
+5. **`applyBrandStepOverride`** — při `state.brand.perfectFit` přepíše hex (a H/C/T) na nearest LM kroku brand palety seedem 1:1.
+6. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig` (včetně volitelného `brand`).
 
 **Fixed chroma** (2+ published kroků) ve state se v tomto kroku **nemění** (může sedět nad peakem; při výpočtu barvy kroku se C stejně clampne).
 
