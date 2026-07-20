@@ -46,6 +46,8 @@ import {
   clearBrandConfig,
   resolveBrandPalette,
   parseBrandHex,
+  nearestStepForTone,
+  resolveParam,
 } from '../src/color-engine.js';
 import { hexToOklch } from '../lib/oklch-relative-chroma.mjs';
 
@@ -521,6 +523,28 @@ function clearBrandLink() {
   if (input instanceof HTMLInputElement) {
     input.value = '';
   }
+}
+
+/**
+ * Drop brand link only when LM H/C at the brand step no longer matches the seed
+ * (mode toggles / unrelated interp points that keep that step stable leave brand alone).
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ */
+function clearBrandIfBrandStepDrifted(palette) {
+  if (!brandLink || brandLink.paletteId !== palette.id || !state.brand) return;
+  const hex = parseBrandHex(state.brand.hex);
+  if (!hex) return;
+
+  const brandHct = hexToHct(hex);
+  const steps = getSteps(state.stepCount);
+  const keyLm = generateKeyPalettes(state.keyPalette, steps).lm;
+  const step = nearestStepForTone(keyLm, steps, brandHct.tone);
+  const hue = resolveParam(palette.lm.hue, step, steps);
+  const chroma = resolveParam(palette.lm.chroma, step, steps);
+  if (hue === brandHct.hue && chroma === brandHct.chroma) return;
+
+  clearBrandLink();
+  scheduleRefreshPreviews();
 }
 
 /**
@@ -2006,9 +2030,9 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
   };
 
   const onParamTouch = () => {
-    if (brandLink && palette.id === brandLink.paletteId && mode === 'lm') {
-      clearBrandLink();
-    }
+    if (mode !== 'lm') return;
+    // After the sync edit that called touch().
+    queueMicrotask(() => clearBrandIfBrandStepDrifted(palette));
   };
 
   for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
