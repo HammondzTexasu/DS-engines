@@ -792,7 +792,6 @@ function patchPreviewRow(previewId, paletteResult, steps, endStep, valueFormat) 
 
   const wraps = row.querySelectorAll(':scope > .swatch-wrap');
   const expectedCount = steps.length + 2;
-  const textMode = getTextMode(previewId);
 
   if (wraps.length !== expectedCount) {
     replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat, getEditOptions(previewId));
@@ -800,12 +799,14 @@ function patchPreviewRow(previewId, paletteResult, steps, endStep, valueFormat) 
   }
 
   let i = 0;
-  patchSwatchWrap(wraps[i], '0', paletteResult.min, null, valueFormat, i++, expectedCount, textMode);
+  patchSwatchWrap(wraps[i], '0', paletteResult.min, null, valueFormat);
+  i += 1;
   for (const step of steps) {
     const data = paletteResult.steps[step];
-    patchSwatchWrap(wraps[i], String(step), data.hex, data, valueFormat, i++, expectedCount, textMode);
+    patchSwatchWrap(wraps[i], String(step), data.hex, data, valueFormat);
+    i += 1;
   }
-  patchSwatchWrap(wraps[i], String(endStep + 10), paletteResult.max, null, valueFormat, i, expectedCount, textMode);
+  patchSwatchWrap(wraps[i], String(endStep + 10), paletteResult.max, null, valueFormat);
 }
 
 /**
@@ -816,17 +817,23 @@ function getTextMode(previewId) {
   return previewId.endsWith('-dm') ? 'dm' : 'lm';
 }
 
+const supportsContrastColor = typeof CSS !== 'undefined'
+  && typeof CSS.supports === 'function'
+  && CSS.supports('color', 'contrast-color(red)');
+
 /**
- * @param {number} index
- * @param {number} total
- * @param {'lm' | 'dm'} textMode
+ * Swatch face fill + label contrast (`--swatch-bg` for CSS `contrast-color()`, HCT tone fallback).
+ * @param {HTMLElement} el
+ * @param {string} hex
  */
-function getSwatchTextColor(index, total, textMode) {
-  const firstHalf = index < total / 2;
-  if (textMode === 'lm') {
-    return firstHalf ? '#111' : '#fff';
+function setSwatchFaceColor(el, hex) {
+  el.style.setProperty('--swatch-bg', hex);
+  el.style.background = hex;
+  if (!supportsContrastColor) {
+    el.style.color = hexToHct(hex).tone > 50 ? '#111' : '#fff';
+  } else {
+    el.style.removeProperty('color');
   }
-  return firstHalf ? '#fff' : '#111';
 }
 
 /**
@@ -872,15 +879,12 @@ function getEditOptions(previewId) {
  * @param {string} hex
  * @param {{ tone?: number, hue?: number, chroma?: number } | null} data
  * @param {'tone' | 'hue' | 'chroma' | 'hc'} valueFormat
- * @param {number} index
- * @param {number} total
- * @param {'lm' | 'dm'} textMode
  */
-function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textMode) {
+function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
   const nameEl = wrap.querySelector('.swatch-name');
   const colorEl = wrap.querySelector('.swatch');
   const valueEl = wrap.querySelector('.swatch-value');
-  if (!nameEl || !colorEl || !valueEl) return;
+  if (!nameEl || !colorEl || !valueEl || !(colorEl instanceof HTMLElement)) return;
 
   nameEl.textContent = name;
 
@@ -890,7 +894,7 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textM
     && colorEl._interaction.level !== 0;
 
   if (!pickerActive && !interactionActive) {
-    colorEl.style.background = hex;
+    setSwatchFaceColor(colorEl, hex);
     if (colorEl._currentHex !== undefined) {
       colorEl._currentHex = hex;
     }
@@ -913,13 +917,12 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat, index, total, textM
         colorEl._interaction.getStates(),
         colorEl._interaction.level,
       );
-      colorEl.style.background = next.hex;
+      setSwatchFaceColor(colorEl, next.hex);
     }
   }
 
   const valueText = formatSwatchValue(data, valueFormat);
   valueEl.textContent = valueText;
-  valueEl.style.color = getSwatchTextColor(index, total, textMode);
 
   const isEditable = colorEl.classList.contains('swatch-editable');
   const isInteractive = colorEl.classList.contains('swatch-interactive');
@@ -2058,16 +2061,13 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
   // Always size cells like the key palette grid (whitelist may show fewer swatches).
   row.style.setProperty('--swatch-cols', String(getSteps(state.stepCount).length + 2));
 
-  const total = steps.length + 2;
-  let index = 0;
-
   row.appendChild(createSwatch('0', paletteResult.min, null, valueFormat, editOptions?.onMinChange
     ? {
       onChange: editOptions.onMinChange,
       onDone: editOptions.onEditDone,
       memoryKey: editOptions.minMemoryKey,
     }
-    : null, index++, total, textMode, null));
+    : null, null));
 
   for (const step of steps) {
     const data = paletteResult.steps[step];
@@ -2077,9 +2077,6 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
       data,
       valueFormat,
       null,
-      index++,
-      total,
-      textMode,
       interaction,
     ));
   }
@@ -2090,7 +2087,7 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
       onDone: editOptions.onEditDone,
       memoryKey: editOptions.maxMemoryKey,
     }
-    : null, index, total, textMode, null));
+    : null, null));
 
   return row;
 }
@@ -2101,16 +2098,13 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
  * @param {{ tone?: number, hue?: number, chroma?: number } | null} data
  * @param {'tone' | 'hue' | 'chroma' | 'hc'} valueFormat
  * @param {{ onChange: (hex: string) => void, onDone?: () => void, memoryKey?: string } | null} [editHandler]
- * @param {number} [index]
- * @param {number} [total]
- * @param {'lm' | 'dm'} [textMode]
  * @param {{
  *   mode: 'lm' | 'dm',
  *   getBgHex: () => string,
  *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
  * } | null} [interaction]
  */
-function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 0, total = 1, textMode = 'lm', interaction = null) {
+function createSwatch(name, hex, data, valueFormat, editHandler = null, interaction = null) {
   const wrap = document.createElement('div');
   wrap.className = 'swatch-wrap';
 
@@ -2121,7 +2115,7 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 
 
   const color = document.createElement('div');
   color.className = 'swatch';
-  color.style.background = hex;
+  setSwatchFaceColor(color, hex);
 
   const valueText = formatSwatchValue(data, valueFormat);
   color.title = editHandler
@@ -2133,7 +2127,6 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, index = 
   const valueEl = document.createElement('div');
   valueEl.className = 'swatch-value';
   valueEl.textContent = valueText;
-  valueEl.style.color = getSwatchTextColor(index, total, textMode);
   color.appendChild(valueEl);
 
   if (editHandler) {
@@ -2182,7 +2175,7 @@ function attachSwatchInteraction(colorEl, opts) {
     if (!ctx) return;
     ctx.level = level;
     if (level === 0) {
-      colorEl.style.background = ctx.restHex;
+      setSwatchFaceColor(colorEl, ctx.restHex);
       return;
     }
     const bgTone = hexToHct(ctx.getBgHex()).tone;
@@ -2192,7 +2185,7 @@ function attachSwatchInteraction(colorEl, opts) {
       ctx.getStates(),
       level,
     );
-    colorEl.style.background = next.hex;
+    setSwatchFaceColor(colorEl, next.hex);
   };
 
   colorEl.addEventListener('pointerenter', () => {
@@ -2227,7 +2220,7 @@ function attachSwatchColorEdit(colorEl, initialHex, handler) {
     openHctColorPicker(colorEl, colorEl._currentHex || initialHex, {
       onChange: (hex) => {
         colorEl._currentHex = hex;
-        colorEl.style.background = hex;
+        setSwatchFaceColor(colorEl, hex);
         handler.onChange(hex);
       },
       onDone: () => handler.onDone?.(),

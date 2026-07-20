@@ -130,6 +130,14 @@ legend {
   justify-content: flex-end;
   cursor: default;
   overflow: visible;
+  /* Fallback when contrast-color() is unavailable (JS may set inline color). */
+  color: #111;
+}
+
+@supports (color: contrast-color(red)) {
+  .swatch {
+    color: contrast-color(var(--swatch-bg, #888888));
+  }
 }
 
 .swatch-editable {
@@ -151,6 +159,7 @@ legend {
   white-space: pre-line;
   word-break: break-word;
   text-shadow: none;
+  color: inherit;
 }
 
 .controls {
