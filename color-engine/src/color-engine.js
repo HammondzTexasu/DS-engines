@@ -514,7 +514,7 @@ export function clearBrandConfig(state) {
 export function resolveBrandPalette(state) {
   if (!state.brand || !state.customPalettes.length) return null;
   const name = sanitizePaletteName(state.brand.palette);
-  return state.customPalettes.find((p) => p.name === name) || state.customPalettes[0] || null;
+  return state.customPalettes.find((p) => sanitizePaletteName(p.name) === name) || null;
 }
 
 /**
@@ -1719,9 +1719,6 @@ function parseBrandConfig(raw, customPalettes) {
       : customPalettes[0]
         ? sanitizePaletteName(customPalettes[0].name)
         : 'palette-1';
-  if (customPalettes.length && !customPalettes.some((p) => p.name === paletteName)) {
-    paletteName = sanitizePaletteName(customPalettes[0].name);
-  }
   return { hex, perfectFit, palette: paletteName };
 }
 

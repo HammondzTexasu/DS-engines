@@ -1833,6 +1833,9 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
       titleInput.value = filtered;
     }
     palette.name = filtered;
+    if (state.brand && brandLink?.paletteId === palette.id) {
+      state.brand.palette = filtered;
+    }
     updatePaletteNameLabels(fs, filtered);
     scheduleRefreshPreviews();
   });
