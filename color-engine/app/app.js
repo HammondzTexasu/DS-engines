@@ -26,6 +26,7 @@ import {
   getSteps,
   CHROMA_MAX,
   KEY_PALETTE_NAME,
+  DEFAULT_BEZIER,
   LINEAR_BEZIER,
   createDefaultState,
   createCustomPalette,
@@ -40,6 +41,7 @@ import {
   parseIncludeStepsInput,
   resolveIncludeSteps,
   normalizeIncludeSteps,
+  setIncludeStepsIntent,
   collapseParamsForSingleIncludeStep,
   isSingleIncludeStep,
   applyRelativeFixedChromaAtStep,
@@ -48,6 +50,8 @@ import {
   resolveBrandPalette,
   parseBrandHex,
   nearestStepForTone,
+  setColorOverride,
+  resolveColorOverrideStep,
   resolveParam,
   resolvePivotTone,
   resolvePivotStep,
@@ -84,24 +88,76 @@ let pendingConfigStatus = null;
  */
 let brandLink = null;
 
-/** Perfect fit toggle — kept in sync with `state.brand.perfectFit` when linked. */
+/** Perfect fit / Override nearest — synced from `state.brand` when linked (mutex). */
 let brandPerfectFit = false;
+let brandOverrideNearest = false;
+
+/**
+ * Snapshot before first brand modifier in this session (curve + LM colorOverride).
+ * Missing after import → OFF Perfect fit restores `DEFAULT_BEZIER`.
+ * @type {{
+ *   lmInterpolator: import('../src/color-engine.js').Bezier,
+ *   dmInterpolator: import('../src/color-engine.js').Bezier,
+ *   colorOverrideHex: string | null,
+ * } | null}
+ */
+let brandModifierBaseline = null;
 
 /**
  * Sync GUI brand controls from `state.brand` (import / boot).
  */
 function syncBrandUiFromState() {
+  brandModifierBaseline = null;
   if (!state.brand) {
     brandLink = null;
     brandPerfectFit = false;
+    brandOverrideNearest = false;
     return;
   }
   brandPerfectFit = Boolean(state.brand.perfectFit);
+  brandOverrideNearest = Boolean(state.brand.overrideNearest) && !brandPerfectFit;
   const palette = resolveBrandPalette(state);
   brandLink = palette
     ? { hex: state.brand.hex, paletteId: palette.id }
     : null;
 }
+
+/**
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ */
+function ensureBrandModifierBaseline(palette) {
+  if (brandModifierBaseline) return;
+  brandModifierBaseline = {
+    lmInterpolator: /** @type {import('../src/color-engine.js').Bezier} */ (
+      [...state.keyPalette.lm.interpolator]
+    ),
+    dmInterpolator: /** @type {import('../src/color-engine.js').Bezier} */ (
+      [...state.keyPalette.dm.interpolator]
+    ),
+    colorOverrideHex: parseBrandHex(palette.colorOverride?.hex ?? '') ,
+  };
+}
+
+function restoreBrandCurveFromBaseline() {
+  const lm = brandModifierBaseline?.lmInterpolator ?? DEFAULT_BEZIER;
+  state.keyPalette.lm.interpolator = /** @type {import('../src/color-engine.js').Bezier} */ ([...lm]);
+  if (!state.keyPalette.dm.interpolatorOverride) {
+    state.keyPalette.dm.interpolator = brandModifierBaseline?.dmInterpolator
+      ? /** @type {import('../src/color-engine.js').Bezier} */ ([...brandModifierBaseline.dmInterpolator])
+      : invertBezier(state.keyPalette.lm.interpolator);
+  }
+}
+
+/**
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ */
+function restoreBrandOverrideFromBaseline(palette) {
+  setColorOverride(palette, brandModifierBaseline?.colorOverrideHex ?? null);
+}
+
+/** Palette+mode keys (`id:lm` / `id:dm`) with Override color UI open (hex may still be empty). */
+/** @type {Set<string>} */
+const colorOverrideUiOpen = new Set();
 
 let pageDarkMode = false;
 
@@ -507,6 +563,7 @@ function applyImportedConfig(raw) {
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
   state = importEngineConfig(parsed);
   hctPickerMemory.clear();
+  colorOverrideUiOpen.clear();
   syncBrandUiFromState();
   render();
 }
@@ -514,27 +571,55 @@ function applyImportedConfig(raw) {
 /**
  * Clear brand seed link (GUI + `state.brand`). Config H/C / curve may stay as last edited.
  */
-function clearBrandLink() {
-  clearBrandConfig(state);
-  if (!brandLink) {
-    const empty = app?.querySelector('.ui-control--brand-hex');
-    if (empty instanceof HTMLInputElement) empty.value = '';
-    return;
+/**
+ * Clear brand seed link (GUI + `state.brand`).
+ * @param {{ undoModifiers?: boolean }} [options] — undo Perfect fit / Override nearest before clear
+ */
+function clearBrandLink(options = {}) {
+  if (options.undoModifiers) {
+    const palette = brandLink?.paletteId
+      ? state.customPalettes.find((p) => p.id === brandLink.paletteId)
+      : resolveBrandPalette(state);
+    if (brandPerfectFit) restoreBrandCurveFromBaseline();
+    if ((brandPerfectFit || brandOverrideNearest) && palette) {
+      restoreBrandOverrideFromBaseline(palette);
+    }
   }
+  clearBrandConfig(state);
+  brandPerfectFit = false;
+  brandOverrideNearest = false;
+  brandModifierBaseline = null;
   brandLink = null;
-  const input = app?.querySelector('.ui-control--brand-hex');
-  if (input instanceof HTMLInputElement) {
-    input.value = '';
+  syncBrandControlsDom();
+}
+
+/** Keep brand seed + mode checkboxes in sync without a full render. */
+function syncBrandControlsDom() {
+  const seed = app?.querySelector('[data-brand-seed-hex]');
+  if (seed instanceof HTMLInputElement) {
+    seed.value = brandLink?.hex ?? '';
+  }
+  const pf = app?.querySelector('.brand-perfect-fit input[type="checkbox"]');
+  if (pf instanceof HTMLInputElement) {
+    pf.checked = brandPerfectFit;
+  }
+  const ov = app?.querySelector('.brand-override-nearest input[type="checkbox"]');
+  if (ov instanceof HTMLInputElement) {
+    ov.checked = brandOverrideNearest;
   }
 }
 
 /**
- * Drop brand link only when LM H/C at the brand step no longer matches the seed
- * (mode toggles / unrelated interp points that keep that step stable leave brand alone).
+ * Drop brand link when LM H/C at the brand step no longer matches the seed.
+ * Keep brand while Perfect fit / Override nearest is on, or palette still has LM colorOverride
+ * (modifiers own the lock — H/C edits must not clear brand). Seed-only brand clears on drift.
  * @param {ReturnType<typeof createCustomPalette>} palette
  */
 function clearBrandIfBrandStepDrifted(palette) {
   if (!brandLink || brandLink.paletteId !== palette.id || !state.brand) return;
+  if (brandPerfectFit || brandOverrideNearest) return;
+  if (parseBrandHex(palette.colorOverride?.hex ?? '')) return;
+
   const hex = parseBrandHex(state.brand.hex);
   if (!hex) return;
 
@@ -542,7 +627,7 @@ function clearBrandIfBrandStepDrifted(palette) {
   const steps = getSteps(state.stepCount);
   const keyLm = generateKeyPalettes(state.keyPalette, steps).lm;
   const step = nearestStepForTone(keyLm, steps, brandHct.tone);
-  const hue = resolveParam(palette.lm.hue, step, steps);
+  const hue = resolveParam(palette.lm.hue, step, steps, true);
   const chroma = resolveParam(palette.lm.chroma, step, steps);
   if (hue === brandHct.hue && chroma === brandHct.chroma) return;
 
@@ -551,14 +636,14 @@ function clearBrandIfBrandStepDrifted(palette) {
 }
 
 /**
- * After key grid changes, re-bend LM curve so Perfect fit still lands on brand T.
- * No-op when Perfect fit is off (H/C are independent of stepCount).
+ * After key grid changes, re-apply Perfect fit (re-bend) or Override nearest (hex lock).
  */
 function reapplyBrandPerfectFitAfterStepCountChange() {
-  if (!brandLink || !brandPerfectFit) return;
+  if (!brandLink || (!brandPerfectFit && !brandOverrideNearest)) return;
   try {
     const result = applyBrandColor(state, brandLink.hex, {
-      perfectFit: true,
+      perfectFit: brandPerfectFit,
+      overrideNearest: brandOverrideNearest,
       paletteId: brandLink.paletteId,
     });
     brandLink = { hex: result.hex, paletteId: result.paletteId };
@@ -877,6 +962,16 @@ function refreshPreviews() {
     const published = resolveIncludeSteps(palette.includeSteps, steps);
     patchPreviewRow(`custom-${palette.id}-lm`, results.lm, published, endStep, 'hc');
     patchPreviewRow(`custom-${palette.id}-dm`, results.dm, published, endStep, 'hc');
+
+    const includeInput = app.querySelector(`#include-steps-${palette.id}`);
+    if (includeInput instanceof HTMLInputElement) {
+      if (palette.includeSteps == null) {
+        includeInput.value = '';
+      } else {
+        includeInput.value = formatIncludeSteps(published);
+      }
+      syncHugInputWidth(includeInput);
+    }
   }
 
   patchThemeSurfaces();
@@ -1305,7 +1400,7 @@ function createIncludeStepsControl(palette, gridSteps) {
   const group = document.createElement('div');
   group.className = 'control-group steps-control include-steps-control';
 
-  const stepsHint = 'Whitelist of published step ids (e.g. 10-20-30). Only these colors appear in the UI and exported tokens; others are dropped.';
+  const stepsHint = 'Whitelist of published step ids (e.g. 10-20-30). With Override color on, steps stay as offsets around the override step (hex tone). Without override, step count changes remap by tone; key curve does not move the whitelist.';
 
   const inputId = `include-steps-${palette.id}`;
   const label = document.createElement('label');
@@ -1333,8 +1428,9 @@ function createIncludeStepsControl(palette, gridSteps) {
 
   const commit = () => {
     const raw = input.value.trim();
+    const keyLm = generateKeyPalettes(state.keyPalette, gridSteps).lm;
     if (!raw) {
-      palette.includeSteps = null;
+      setIncludeStepsIntent(palette, null, keyLm, gridSteps);
       input.value = '';
       input.placeholder = defaultPlaceholder;
       syncHugInputWidth(input);
@@ -1346,13 +1442,13 @@ function createIncludeStepsControl(palette, gridSteps) {
       parseIncludeStepsInput(raw, gridSteps),
       gridSteps,
     );
-    palette.includeSteps = next;
-    if (next == null) {
+    setIncludeStepsIntent(palette, next, keyLm, gridSteps);
+    if (palette.includeSteps == null) {
       input.value = '';
       input.placeholder = defaultPlaceholder;
     } else {
-      input.value = formatIncludeSteps(next);
-      if (isSingleIncludeStep(next, gridSteps)) {
+      input.value = formatIncludeSteps(palette.includeSteps);
+      if (isSingleIncludeStep(palette.includeSteps, gridSteps)) {
         collapseParamsForSingleIncludeStep(palette, gridSteps);
       }
     }
@@ -1473,18 +1569,20 @@ function createKeyPaletteTitle() {
 }
 
 /**
- * Brand hex input + Perfect fit toggle (`state.brand` + applyBrandColor).
+ * Brand hex input + Perfect fit / Override nearest toggles (`state.brand` + applyBrandColor).
  */
 function createBrandColorControl() {
   const group = document.createElement('div');
   group.className = 'control-group steps-control brand-color-control';
 
-  const brandHint = 'Your brand seed color. Applies LM hue/chroma to the linked custom palette (defaults to the first one). Stored in config for sharing. With Perfect fit it also bends the key tone curve and forces that step’s hex to match the seed 1:1.';
-  const perfectFitHint = 'Bend the LM key tone curve just enough so a grid step matches this brand’s tone, then force that step’s hex to the seed (1:1). Brand color wins; the palette changes as little as possible.';
+  const brandHint = 'Your brand seed color. Applies LM hue/chroma to the linked custom palette (defaults to the first one). Stored in config for sharing. Perfect fit bends the key tone curve and locks exact hex; Override nearest locks exact hex on the nearest-T step without bending the curve.';
+  const perfectFitHint = 'Modifier: bend the LM key tone curve so a grid step matches this brand’s tone, and lock Override color. Off restores the curve from before this session’s modifier (or the default curve after import). Cannot combine with Override nearest.';
+  const overrideNearestHint = 'Modifier: lock Override color on the nearest-T step (no curve bend). Off restores the previous lock (or clears it after import). Cannot combine with Perfect fit.';
 
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'ui-control ui-control--brand-hex';
+  input.dataset.brandSeedHex = '';
   input.autocomplete = 'off';
   input.spellcheck = false;
   input.placeholder = 'brand color';
@@ -1492,10 +1590,68 @@ function createBrandColorControl() {
   input.title = brandHint;
   input.value = brandLink?.hex ?? '';
 
+  const pfToggle = document.createElement('input');
+  pfToggle.type = 'checkbox';
+  pfToggle.checked = brandPerfectFit;
+  pfToggle.title = perfectFitHint;
+  pfToggle.setAttribute('aria-label', perfectFitHint);
+
+  const ovToggle = document.createElement('input');
+  ovToggle.type = 'checkbox';
+  ovToggle.checked = brandOverrideNearest;
+  ovToggle.title = overrideNearestHint;
+  ovToggle.setAttribute('aria-label', overrideNearestHint);
+
+  /** @param {{ perfectFit?: boolean, overrideNearest?: boolean }} modes */
+  const applyBrandModes = (modes) => {
+    const wasPf = brandPerfectFit;
+    const wasOv = brandOverrideNearest;
+    const nextPf = Boolean(modes.perfectFit);
+    const nextOv = Boolean(modes.overrideNearest) && !nextPf;
+
+    const hex = parseBrandHex(brandLink?.hex ?? input.value);
+    const palette = brandLink?.paletteId
+      ? state.customPalettes.find((p) => p.id === brandLink.paletteId)
+      : state.customPalettes[0] ?? null;
+
+    if ((nextPf || nextOv) && palette) {
+      ensureBrandModifierBaseline(palette);
+    }
+    if (wasPf && !nextPf) {
+      restoreBrandCurveFromBaseline();
+    }
+    if ((wasPf || wasOv) && !nextPf && !nextOv && palette) {
+      restoreBrandOverrideFromBaseline(palette);
+    }
+
+    brandPerfectFit = nextPf;
+    brandOverrideNearest = nextOv;
+    pfToggle.checked = brandPerfectFit;
+    ovToggle.checked = brandOverrideNearest;
+
+    if (!nextPf && !nextOv) {
+      brandModifierBaseline = null;
+    }
+
+    if (!hex) return;
+    try {
+      const result = applyBrandColor(state, hex, {
+        perfectFit: brandPerfectFit,
+        overrideNearest: brandOverrideNearest,
+        paletteId: brandLink?.paletteId ?? palette?.id,
+      });
+      brandLink = { hex: result.hex, paletteId: result.paletteId };
+      input.value = result.hex;
+      render();
+    } catch {
+      /* keep link */
+    }
+  };
+
   const commit = () => {
     const raw = input.value.trim();
     if (!raw) {
-      clearBrandLink();
+      clearBrandLink({ undoModifiers: true });
       scheduleRefreshPreviews();
       return;
     }
@@ -1507,6 +1663,7 @@ function createBrandColorControl() {
     try {
       const result = applyBrandColor(state, hex, {
         perfectFit: brandPerfectFit,
+        overrideNearest: brandOverrideNearest,
         paletteId: brandLink?.paletteId,
       });
       brandLink = { hex: result.hex, paletteId: result.paletteId };
@@ -1525,32 +1682,40 @@ function createBrandColorControl() {
     }
   });
 
-  const toggleRow = document.createElement('label');
-  toggleRow.className = 'checkbox-row brand-perfect-fit';
-  toggleRow.title = perfectFitHint;
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.checked = brandPerfectFit;
-  toggle.title = perfectFitHint;
-  toggle.addEventListener('change', () => {
-    brandPerfectFit = toggle.checked;
-    if (!brandLink) return;
-    try {
-      const result = applyBrandColor(state, brandLink.hex, {
-        perfectFit: brandPerfectFit,
-        paletteId: brandLink.paletteId,
-      });
-      brandLink = { hex: result.hex, paletteId: result.paletteId };
-      render();
-    } catch {
-      /* keep link */
+  const toggles = document.createElement('div');
+  toggles.className = 'brand-mode-toggles';
+
+  const pfRow = document.createElement('label');
+  pfRow.className = 'checkbox-row brand-perfect-fit';
+  pfRow.title = perfectFitHint;
+  pfToggle.addEventListener('change', () => {
+    if (pfToggle.checked) {
+      applyBrandModes({ perfectFit: true, overrideNearest: false });
+    } else {
+      applyBrandModes({ perfectFit: false, overrideNearest: brandOverrideNearest });
     }
   });
-  toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Perfect fit'));
+  pfRow.appendChild(pfToggle);
+  pfRow.appendChild(document.createTextNode(' Perfect fit'));
+
+  const ovRow = document.createElement('label');
+  ovRow.className = 'checkbox-row brand-override-nearest';
+  ovRow.title = overrideNearestHint;
+  ovToggle.addEventListener('change', () => {
+    if (ovToggle.checked) {
+      applyBrandModes({ perfectFit: false, overrideNearest: true });
+    } else {
+      applyBrandModes({ perfectFit: brandPerfectFit, overrideNearest: false });
+    }
+  });
+  ovRow.appendChild(ovToggle);
+  ovRow.appendChild(document.createTextNode(' Override nearest'));
+
+  toggles.appendChild(pfRow);
+  toggles.appendChild(ovRow);
 
   group.appendChild(input);
-  group.appendChild(toggleRow);
+  group.appendChild(toggles);
   return group;
 }
 
@@ -1878,6 +2043,7 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
   palette.name = sanitizePaletteName(palette.name);
   if (palette.includeSteps === undefined) {
     palette.includeSteps = null;
+    palette._includeTones = null;
   }
 
   const titleInput = document.createElement('input');
@@ -1983,6 +2149,8 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
   removeBtn.textContent = 'Remove';
   removeBtn.addEventListener('click', () => {
     if (brandLink?.paletteId === palette.id) clearBrandLink();
+    colorOverrideUiOpen.delete(`${palette.id}:lm`);
+    colorOverrideUiOpen.delete(`${palette.id}:dm`);
     state.customPalettes = state.customPalettes.filter((p) => p.id !== palette.id);
     render();
   });
@@ -2046,6 +2214,8 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
   const body = document.createElement('div');
   body.className = 'param-settings-body';
 
+  body.appendChild(createColorOverrideControls(palette, mode, keyResult, steps));
+
   const chromaCtx = {
     palette,
     mode,
@@ -2053,6 +2223,8 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
     steps,
     singlePublishedStep,
   };
+
+  const overrideStep = resolveColorOverrideStep(palette, keyResult, steps, mode);
 
   const onParamTouch = () => {
     if (mode !== 'lm') return;
@@ -2075,11 +2247,125 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
       paramName === 'chroma' ? chromaCtx : null,
       singlePublishedStep,
       onParamTouch,
+      overrideStep,
     ));
   }
 
   group.appendChild(body);
   return group;
+}
+
+/**
+ * Sticky Override color (LM / DM): hex lock on nearest-T step. Modes are independent.
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {ReturnType<typeof generateKeyPalettes>['lm']} keyResult
+ * @param {number[]} steps
+ */
+function createColorOverrideControls(palette, mode, keyResult, steps) {
+  const wrap = document.createElement('div');
+  wrap.className = 'color-override-controls';
+
+  const modeLabel = mode.toUpperCase();
+  const uiKey = `${palette.id}:${mode}`;
+  const hint = `Force an exact hex on the ${modeLabel} step whose key tone is nearest to this color’s tone. Sticky while on. With interpolate, that step is a locked control point (step + value read-only). Independent of the other mode’s override.`;
+
+  const ov = mode === 'dm' ? palette.colorOverrideDm : palette.colorOverride;
+  const hasOverride = Boolean(ov?.hex);
+  const uiOpen = hasOverride || colorOverrideUiOpen.has(uiKey);
+
+  const toggleRow = document.createElement('label');
+  toggleRow.className = 'checkbox-row';
+  toggleRow.title = hint;
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.checked = uiOpen;
+  toggle.title = hint;
+  toggle.setAttribute('aria-label', hint);
+  toggleRow.appendChild(toggle);
+  toggleRow.appendChild(document.createTextNode(' Override color'));
+  wrap.appendChild(toggleRow);
+
+  const fields = document.createElement('div');
+  fields.className = 'color-override-fields';
+  fields.hidden = !uiOpen;
+
+  const ovStep = resolveColorOverrideStep(palette, keyResult, steps, mode);
+  const stepSelect = createStepSelect(
+    'Step',
+    ovStep ?? steps[0],
+    steps,
+    true,
+    () => {},
+  );
+  stepSelect.title = 'Nearest key step to this hex’s tone (follows key curve / stepCount). Empty hex → step updates after you enter a color.';
+
+  const hexInput = document.createElement('input');
+  hexInput.type = 'text';
+  hexInput.className = 'ui-control ui-control--brand-hex';
+  hexInput.autocomplete = 'off';
+  hexInput.spellcheck = false;
+  hexInput.placeholder = '#rrggbb';
+  hexInput.setAttribute('aria-label', `Override hex (${modeLabel})`);
+  hexInput.title = hint;
+  hexInput.value = ov?.hex ?? '';
+
+  const commitHex = () => {
+    const raw = hexInput.value.trim();
+    if (!raw) {
+      setColorOverride(palette, null, mode);
+      colorOverrideUiOpen.add(uiKey);
+      hexInput.value = '';
+      render();
+      return;
+    }
+    const hex = parseBrandHex(raw);
+    if (!hex) {
+      hexInput.value = (mode === 'dm' ? palette.colorOverrideDm : palette.colorOverride)?.hex ?? '';
+      return;
+    }
+    setColorOverride(palette, hex, mode);
+    colorOverrideUiOpen.add(uiKey);
+    hexInput.value = hex;
+    render();
+  };
+
+  hexInput.addEventListener('change', commitHex);
+  hexInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      hexInput.blur();
+    }
+  });
+
+  fields.appendChild(stepSelect);
+  fields.appendChild(hexInput);
+  wrap.appendChild(fields);
+
+  toggle.addEventListener('change', () => {
+    if (toggle.checked) {
+      colorOverrideUiOpen.add(uiKey);
+      fields.hidden = false;
+      hexInput.value = (mode === 'dm' ? palette.colorOverrideDm : palette.colorOverride)?.hex ?? '';
+      // No default hex — override applies only after a valid hex is entered.
+    } else {
+      colorOverrideUiOpen.delete(uiKey);
+      setColorOverride(palette, null, mode);
+      fields.hidden = true;
+      hexInput.value = '';
+      // Brand Override nearest / Perfect fit owned this lock — drop brand link + sync brand toggles.
+      if (
+        mode === 'lm'
+        && brandLink?.paletteId === palette.id
+        && (brandOverrideNearest || brandPerfectFit)
+      ) {
+        clearBrandLink();
+      }
+      render();
+    }
+  });
+
+  return wrap;
 }
 
 /**
@@ -2094,8 +2380,9 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
  * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[], singlePublishedStep?: number | null } | null} [chromaCtx]
  * @param {number | null} [singlePublishedStep]
  * @param {(() => void) | null} [onParamTouch]
+ * @param {number | null} [overrideStep] — colorOverride / colorOverrideDm locked step (interpolate point read-only)
  */
-function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null, singlePublishedStep = null, onParamTouch = null) {
+function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null, singlePublishedStep = null, onParamTouch = null, overrideStep = null) {
   const section = document.createElement('div');
   section.className = 'param-section';
 
@@ -2217,7 +2504,18 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
       }));
     }
   } else {
-    section.appendChild(createInterpControls(param, steps, endStep, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx, touch));
+    section.appendChild(createInterpControls(
+      param,
+      steps,
+      endStep,
+      interpolatorPrefix,
+      max,
+      onUpdate,
+      nameSuffix,
+      chromaCtx,
+      touch,
+      overrideStep,
+    ));
   }
 
   return section;
@@ -2233,8 +2531,9 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
  * @param {string} nameSuffix
  * @param {{ palette: ReturnType<typeof createCustomPalette>, mode: 'lm' | 'dm', keyResult: ReturnType<typeof generateKeyPalettes>['lm'], steps: number[] } | null} [chromaCtx]
  * @param {(() => void) | null} [onParamTouch]
+ * @param {number | null} [overrideStep]
  */
-function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix, chromaCtx = null, onParamTouch = null) {
+function createInterpControls(param, steps, endStep, prefix, max, onUpdate, nameSuffix, chromaCtx = null, onParamTouch = null, overrideStep = null) {
   const container = document.createElement('div');
   const touch = () => onParamTouch?.();
 
@@ -2246,30 +2545,38 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
   for (let i = 0; i < param.points.length; i++) {
     const point = param.points[i];
     const isEndpoint = i === 0 || i === param.points.length - 1;
+    const isOverridePoint = overrideStep != null && point.step === overrideStep;
 
     const row = document.createElement('div');
     row.className = 'interp-point';
+    if (isOverridePoint) row.classList.add('interp-point--override');
 
     const fields = document.createElement('div');
     fields.className = 'interp-point-fields';
 
-    fields.appendChild(createStepSelect('Step', point.step, steps, isEndpoint, (step) => {
-      touch();
-      point.step = step;
-      if (chromaCtx) {
-        const limit = liveChromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, point.step);
-        const clampOn = isClampInterpolatedChroma(param);
-        if (clampOn) {
-          if (typeof point.ratio === 'number' && Number.isFinite(point.ratio)) {
-            lockChromaPointRatio(point, Math.round(point.ratio * limit), limit);
-          } else {
-            lockChromaPointRatio(point, point.value, limit);
+    fields.appendChild(createStepSelect(
+      'Step',
+      point.step,
+      steps,
+      isEndpoint || isOverridePoint,
+      (step) => {
+        touch();
+        point.step = step;
+        if (chromaCtx) {
+          const limit = liveChromaLimitAtStep(chromaCtx.palette, chromaCtx.mode, point.step);
+          const clampOn = isClampInterpolatedChroma(param);
+          if (clampOn) {
+            if (typeof point.ratio === 'number' && Number.isFinite(point.ratio)) {
+              lockChromaPointRatio(point, Math.round(point.ratio * limit), limit);
+            } else {
+              lockChromaPointRatio(point, point.value, limit);
+            }
           }
         }
-      }
-      param.points.sort((a, b) => a.step - b.step);
-      onUpdate();
-    }));
+        param.points.sort((a, b) => a.step - b.step);
+        onUpdate();
+      },
+    ));
 
     if (chromaCtx) {
       fields.appendChild(createChromaPointSlider(
@@ -2280,18 +2587,19 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
         max,
         touch,
         isClampInterpolatedChroma(param),
+        isOverridePoint,
       ));
     } else {
       fields.appendChild(createSliderControl('Value', point.value, 0, max, (v) => {
         touch();
         point.value = v;
         scheduleRefreshPreviews();
-      }));
+      }, { disabled: isOverridePoint }));
     }
 
     row.appendChild(fields);
 
-    if (!isEndpoint) {
+    if (!isEndpoint && !isOverridePoint) {
       row.classList.add('interp-point--with-remove');
       const action = document.createElement('div');
       action.className = 'interp-point-action';
@@ -3112,11 +3420,13 @@ function createSliderTrack(wrap) {
  *   hardClampToMarker?: boolean,
  *   getMarkerMax?: () => number,
  *   markerKey?: string | null,
+ *   disabled?: boolean,
  * }} [options]
  */
 function createSliderControl(label, value, min, max, onChange, options = {}) {
+  const disabled = Boolean(options.disabled);
   const group = document.createElement('div');
-  group.className = 'control-group slider-control';
+  group.className = `control-group slider-control${disabled ? ' is-disabled' : ''}`;
 
   const transform = options.transform ?? ((v) => v);
   const getMarkerMax = options.getMarkerMax;
@@ -3164,6 +3474,7 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   if (decimals > 0) {
     numberInput.inputMode = 'decimal';
   }
+  numberInput.disabled = disabled;
 
   const wrap = document.createElement('div');
   wrap.className = 'chroma-slider-wrap';
@@ -3180,10 +3491,13 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   range.step = String(step);
   range.value = String(value);
   range.setAttribute('aria-label', label);
+  range.disabled = disabled;
   if (options.controlKey) {
     range.dataset.chromaControl = options.controlKey;
   }
-  attachRangePointerCapture(range);
+  if (!disabled) {
+    attachRangePointerCapture(range);
+  }
 
   const commit = (raw) => {
     const v = applyValue(raw);
@@ -3199,8 +3513,10 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     onChange(v);
   };
 
-  numberInput.addEventListener('change', () => commit(numberInput.value));
-  range.addEventListener('input', () => commit(range.value));
+  if (!disabled) {
+    numberInput.addEventListener('change', () => commit(numberInput.value));
+    range.addEventListener('input', () => commit(range.value));
+  }
 
   row.appendChild(numberInput);
   wrap.appendChild(range);
@@ -3278,11 +3594,12 @@ function createChromaSingleStepSlider(param, palette, mode, step, uiMax, onTouch
  * @param {number} uiMax
  * @param {(() => void) | null} [onTouch]
  * @param {boolean} [clampOn=true]
+ * @param {boolean} [disabled=false]
  */
-function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null, clampOn = true) {
+function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null, clampOn = true, disabled = false) {
   const controlKey = `${palette.id}:${mode}:point:${pointIndex}`;
   const limit = liveChromaLimitAtStep(palette, mode, point.step);
-  if (clampOn) {
+  if (clampOn && !disabled) {
     lockChromaPointRatio(point, Math.min(point.value, limit), limit);
   }
 
@@ -3301,6 +3618,7 @@ function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouc
     markerKey: controlKey,
     getMarkerMax: () => liveChromaLimitAtStep(palette, mode, point.step),
     hardClampToMarker: clampOn,
+    disabled,
   });
 }
 

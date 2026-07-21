@@ -107,8 +107,10 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 
 * `version` — musí sedět s `ENGINE_CONFIG_VERSION` (aktuálně `1`), jinak `importEngineConfig` hodí chybu.
 * `customPalettes[].name` — sanitizuje se (`a–z`, `0–9`, `-`); runtime `id` se do JSON **neukládá**.
-* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše. Jinak unikátní seřazené step id z mřížky (ne `min`/`max`). Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
-* **`brand`** (volitelné) — `{ hex, perfectFit, palette }`; `palette` = jméno custom palety. Neexistující jméno → import **zahodí** celý `brand` (žádný tichý remap).
+* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše. Jinak unikátní seřazené step id. Bez override: `_includeTones` + T-remap při `stepCount`. S LM `colorOverride`: `_includeOffsets` od override stepu (hex T) při key změně i `stepCount`. Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
+* **`brand`** (volitelné) — `{ hex, perfectFit, overrideNearest, palette }`; `perfectFit` ⊥ `overrideNearest` (PF vyhraje). Orphan `palette` → drop brand.
+* **`customPalettes[].colorOverride`** (volitelné) — `{ hex }`; sticky LM hex lock; step = nearest key T (neukládá se).
+* **`customPalettes[].colorOverrideDm`** (volitelné) — totéž pro DM; nezávislé na LM.
 * **ParamConfig**
   * `{ "mode": "fixed", "value": number, "ratio"? }` — `ratio` u single-include-step chromy (a runtime u fixed)
   * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }`  
@@ -150,11 +152,15 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `resolvePivotStep` / `remapPivotStep` / `resolvePivotTone` / `defaultPivotStep` | Pivot prah z kroku mřížky |
 | `importEngineConfig(json)` | JSON → state (orphan `brand.palette` → `brand: null`) |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
-| `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma ve state); volá `applyBrandStepOverride` |
-| `applyBrandColor(state, hex, opts?)` | Seed z hex → nearest step; volitelně ohýbá LM bezier; nastaví LM H/C brand palety; zapíše `state.brand` |
-| `clearBrandConfig(state)` | Smaže `state.brand` (export už brand nemá; křivka zůstává) |
-| `applyBrandStepOverride(state, key, custom)` | Při `perfectFit` vynutí seed hex na LM kroku (**voláno z** `generateSystem`) |
-| `normalizeStateForStepCount(state, previousStepCount?)` | Po změně `stepCount`: interpolate body + `includeSteps` + remap `pivotStep`. GUI: při Perfect fit pak znovu `applyBrandColor` |
+| `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma / override body); volá `syncColorOverridePoints` + `applyColorOverrides` |
+| `setColorOverride(palette, hex\|null, mode?)` | Sticky hex lock (`colorOverride` / `colorOverrideDm`); default mode `lm` |
+| `resolveColorOverrideStep(palette, keyResult, steps, mode?)` | Aktuální locknutý step id pro mód |
+| `syncColorOverridePoints(state, key)` | Dosadí LM i DM interp body na override step (vyhraje slot) |
+| `applyColorOverrides(state, key, custom)` | Vynutí hex 1:1 na LM / DM kroku (**voláno z** `generateSystem`) |
+| `applyBrandColor(state, hex, opts?)` | Seed → H/C; `perfectFit` = ohyb + override; `overrideNearest` = jen override (mutex) |
+| `clearBrandConfig(state)` | Smaže `state.brand` (křivka i sticky override zůstávají — GUI toggle undo řeší baseline zvlášť) |
+| `applyBrandStepOverride(...)` | Alias → `applyColorOverrides` |
+| `normalizeStateForStepCount(state, previousStepCount?)` | Po změně `stepCount`: interpolate body + `syncIncludeStepsFromTones` + remap `pivotStep`. GUI: při Perfect fit pak znovu `applyBrandColor` |
 | `colorAtInteractionState(color, bgHex, states, level, pivotTone)` | state1/state2 barva; matika T; `bgHex` = povrch za barvou |
 | `interactionStateDelta(...)` | Podepsané Δ z HCT T na 1 desetinu (runtime tokeny + OKLCH) |
 | `roundStateDelta(n)` | Zaokrouhlení Δ na 1 desetinu |
@@ -168,10 +174,11 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **Interaction states:** `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`, `resolvePivotTone`, `applyInteractionTone`, `interactionStateDelta`, `roundStateDelta`  
   * Matika vždy HCT T (směr + \|Δ\|); Δ na 1 desetinu; OKLCH/runtime jen aplikace. Uložené preference (space/relative/gamut) přežijí runtime.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
-* **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
+* **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → shortest-arc přes `hueInterpDelta`), `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
-* **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
-* **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`, `applyBrandStepOverride`
+* **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `setIncludeStepsIntent`, `syncIncludeStepsFromTones`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
+* **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`
+* **Color override:** `setColorOverride`, `resolveColorOverrideStep`, `syncColorOverridePoints`, `applyColorOverrides`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
 * **Tokeny:** `buildTokensCss(...)` — barvy min/steps/max; build = per-palette `state1`/`state2` hex; runtime = univerzální `--state-*-state1|2` / `--state-dm-*` (Δ z T, key krok)
 * **Jména:** `sanitizePaletteName`, `filterPaletteNameInput`
@@ -183,11 +190,13 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 Pořadí uvnitř:
 
 1. Spočítá key palety z aktuálního `stepCount`.
-2. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
-3. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (při clamp on).
-4. Spočítá custom palety (LM/DM) na **plné** mřížce (mezikroky: clamp on → `clampChroma`; clamp off → raw interpolované C).
-5. **`applyBrandStepOverride`** — při `state.brand.perfectFit` přepíše hex (a H/C/T) na nearest LM kroku brand palety seedem 1:1.
-6. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig` (včetně volitelného `brand`).
+2. **`syncIncludeStepsFromTones`** (`requireColorOverride`) — u palet s LM `colorOverride` drží whitelist jako offsety kolem override stepu (hex T). (Při `stepCount` bez flagu: s override = offsety, bez = `_includeTones`.)
+3. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
+4. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (při clamp on).
+5. **`syncColorOverridePoints`** — u palet s `colorOverride` / `colorOverrideDm` drží LM / DM interp body na nearest-T kroku (value z hexu; override vyhraje slot).
+6. Spočítá custom palety (LM/DM) na **plné** mřížce (mezikroky: clamp on → `clampChroma`; clamp off → raw interpolované C).
+7. **`applyColorOverrides`** — vynutí přesný hex na LM / DM kroku.
+8. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig` (včetně volitelného `brand` / `colorOverride` / `colorOverrideDm`).
 
 **Fixed chroma** (2+ published kroků) ve state se v tomto kroku **nemění** (může sedět nad peakem; při výpočtu barvy kroku se C stejně clampne).
 
@@ -211,7 +220,7 @@ Volat **po** nastavení `state.stepCount` (před `generateSystem` / render).
 | Střední | Relativní pozice `t` na staré škále → nejbližší **volný** prostřední slot |
 | Zahazování | Jen když `počet středních > počet prostředních slotů` (nechá se zleva podle `t`) |
 
-Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. `includeSteps` se prožene `normalizeIncludeSteps` (neplatné id pryč; plná mřížka → `null`). Volitelný argument `previousStepCount` proporčně přemapuje LM `pivotStep` na novou mřížku.
+Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. `includeSteps` při `stepCount`: s override = offsety od override stepu, bez = `_includeTones`. Key křivka hýbe whitelistem jen s LM `colorOverride` (offsety). Volitelný argument `previousStepCount` proporčně přemapuje LM `pivotStep` na novou mřížku.
 
 ---
 

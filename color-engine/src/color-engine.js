@@ -43,13 +43,21 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
 /** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig | InteractionStatesDeltas, interpolatorOverride?: boolean }} KeyPaletteConfig */
 /** @typedef {{ lm: KeyPaletteConfig, dm: KeyPaletteConfig & { interpolatorOverride: boolean } }} KeyPaletteState */
 /**
- * Custom palette. `includeSteps` — whitelist of grid step ids to publish (tokens + GUI).
- * `null` / omitted / full grid = all key steps. Never includes min/max.
- * @typedef {{ name: string, includeSteps: number[] | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig } }} CustomPaletteConfig
+ * Sticky hex lock: step = nearest key T to hex tone (recomputed; not stored).
+ * @typedef {{ hex: string }} ColorOverride
  */
 /**
- * Optional brand seed (shared in config). With perfectFit, generateSystem forces seed hex on that LM step.
- * @typedef {{ hex: string, perfectFit: boolean, palette: string }} BrandConfig
+ * Custom palette. `includeSteps` — whitelist of grid step ids to publish (tokens + GUI).
+ * `null` / omitted / full grid = all key steps. Never includes min/max.
+ * Runtime `_includeTones` — LM key tones (stepCount remap without override).
+ * Runtime `_includeOffsets` — grid-index offsets from LM colorOverride step (key-T / stepCount with override).
+ * `colorOverride` / `colorOverrideDm` — optional exact hex on LM / DM nearest-T step (export/import).
+ * @typedef {{ name: string, includeSteps: number[] | null, colorOverride: ColorOverride | null, colorOverrideDm: ColorOverride | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig }, _includeTones?: number[] | null, _includeOffsets?: number[] | null }} CustomPaletteConfig
+ */
+/**
+ * Optional brand seed (shared in config).
+ * `perfectFit` and `overrideNearest` are mutually exclusive (PF wins if both set).
+ * @typedef {{ hex: string, perfectFit: boolean, overrideNearest: boolean, palette: string }} BrandConfig
  */
 /** @typedef {{ stepCount: number, keyPalette: KeyPaletteState, customPalettes: Array<CustomPaletteConfig & { id: string }>, brand: BrandConfig | null }} EngineState */
 
@@ -165,6 +173,131 @@ export function normalizeIncludeSteps(includeSteps, gridSteps) {
 }
 
 /**
+ * Lock whitelist intent as LM key tones; sets `includeSteps` + `_includeTones`.
+ * With LM colorOverride, also locks `_includeOffsets` relative to the override step.
+ * @param {CustomPaletteConfig} palette
+ * @param {number[] | null | undefined} includeSteps
+ * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {number[]} steps
+ */
+export function setIncludeStepsIntent(palette, includeSteps, keyLm, steps) {
+  const normalized = normalizeIncludeSteps(includeSteps, steps);
+  palette.includeSteps = normalized;
+  if (normalized == null) {
+    palette._includeTones = null;
+    palette._includeOffsets = null;
+    return;
+  }
+  palette._includeTones = normalized.map((step) => {
+    const tone = keyLm.steps[step]?.tone;
+    return tone != null && Number.isFinite(tone) ? tone : 0;
+  });
+  lockIncludeOffsetsAroundOverride(palette, keyLm, steps, normalized);
+}
+
+/**
+ * Index offsets of `includeSteps` from the LM colorOverride step (includes 0).
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {number[]} steps
+ * @param {number[]} includeSteps
+ */
+function lockIncludeOffsetsAroundOverride(palette, keyLm, steps, includeSteps) {
+  const ovStep = resolveColorOverrideStep(palette, keyLm, steps);
+  if (ovStep == null) {
+    palette._includeOffsets = null;
+    return;
+  }
+  const ovIdx = steps.indexOf(ovStep);
+  if (ovIdx < 0) {
+    palette._includeOffsets = null;
+    return;
+  }
+  const offsets = includeSteps.map((step) => steps.indexOf(step) - ovIdx);
+  if (!offsets.includes(0)) offsets.push(0);
+  offsets.sort((a, b) => a - b);
+  palette._includeOffsets = offsets;
+}
+
+/**
+ * Place whitelist around LM colorOverride step using `_includeOffsets`.
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {number[]} steps
+ */
+function syncIncludeStepsAroundOverride(palette, keyLm, steps) {
+  const ovStep = resolveColorOverrideStep(palette, keyLm, steps);
+  if (ovStep == null || !steps.length) return;
+
+  const published = resolveIncludeSteps(palette.includeSteps, steps);
+  if (palette.includeSteps == null && (palette._includeOffsets == null || !palette._includeOffsets.length)) {
+    return;
+  }
+
+  if (!palette._includeOffsets?.length) {
+    if (!published.length || palette.includeSteps == null) {
+      palette._includeOffsets = null;
+      return;
+    }
+    lockIncludeOffsetsAroundOverride(palette, keyLm, steps, published);
+  }
+
+  const ovIdx = steps.indexOf(ovStep);
+  if (ovIdx < 0 || !palette._includeOffsets?.length) return;
+
+  const last = steps.length - 1;
+  const mapped = palette._includeOffsets.map((off) => {
+    const idx = Math.min(last, Math.max(0, ovIdx + off));
+    return steps[idx];
+  });
+  if (!mapped.includes(ovStep)) mapped.push(ovStep);
+  palette.includeSteps = normalizeIncludeSteps(mapped, steps);
+  if (palette.includeSteps == null) palette._includeOffsets = null;
+}
+
+/**
+ * Re-resolve `includeSteps`: with LM colorOverride → offsets from override step;
+ * otherwise from `_includeTones` (nearest T). Seeds intent once if missing.
+ * @param {EngineState} state
+ * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {number[]} steps
+ * @param {{ requireColorOverride?: boolean }} [options] — when true, only palettes with LM `colorOverride`
+ */
+export function syncIncludeStepsFromTones(state, keyLm, steps, options = {}) {
+  const requireOverride = Boolean(options.requireColorOverride);
+  for (const palette of state.customPalettes) {
+    const hasOverride = Boolean(parseBrandHex(palette.colorOverride?.hex ?? ''));
+    if (requireOverride && !hasOverride) continue;
+
+    if (hasOverride) {
+      syncIncludeStepsAroundOverride(palette, keyLm, steps);
+      continue;
+    }
+
+    palette._includeOffsets = null;
+
+    if (palette.includeSteps == null && (palette._includeTones == null || !palette._includeTones.length)) {
+      palette._includeTones = null;
+      continue;
+    }
+    if (!palette._includeTones?.length) {
+      if (!palette.includeSteps?.length) {
+        palette._includeTones = null;
+        palette.includeSteps = null;
+        continue;
+      }
+      palette._includeTones = palette.includeSteps.map((step) => {
+        const tone = keyLm.steps[step]?.tone;
+        return tone != null && Number.isFinite(tone) ? tone : 0;
+      });
+    }
+    const mapped = palette._includeTones.map((tone) => nearestStepForTone(keyLm, steps, tone));
+    palette.includeSteps = normalizeIncludeSteps(mapped, steps);
+    if (palette.includeSteps == null) palette._includeTones = null;
+  }
+}
+
+/**
  * @param {number[] | null | undefined} includeSteps
  * @param {number[]} gridSteps
  * @returns {boolean}
@@ -188,7 +321,7 @@ export function collapseParamsForSingleIncludeStep(palette, gridSteps) {
     for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
       const param = palette[mode][paramName];
       if (param.mode !== 'interpolate') continue;
-      const value = resolveParam(param, step, gridSteps);
+      const value = resolveParam(param, step, gridSteps, paramName === 'hue');
       /** @type {FixedParam} */
       const fixed = createFixedParam(value);
       if (paramName === 'chroma') {
@@ -308,6 +441,16 @@ function cubicBezierY(x, bezier) {
 }
 
 /**
+ * Shortest signed Δ on the hue circle (−180, 180]. Tune hue path here.
+ * @param {number} from
+ * @param {number} to
+ * @returns {number}
+ */
+export function hueInterpDelta(from, to) {
+  return ((Number(to) - Number(from)) % 360 + 540) % 360 - 180;
+}
+
+/**
  * @param {number} startVal
  * @param {number} endVal
  * @param {number} t
@@ -317,6 +460,20 @@ function cubicBezierY(x, bezier) {
 export function interpolateValue(startVal, endVal, t, bezier) {
   const eased = cubicBezierY(t, bezier);
   return Math.round(startVal + (endVal - startVal) * eased);
+}
+
+/**
+ * Hue segment: same easing as `interpolateValue`, shortest-arc direction.
+ * @param {number} startVal
+ * @param {number} endVal
+ * @param {number} t
+ * @param {Bezier} bezier
+ * @returns {number}
+ */
+function interpolateHue(startVal, endVal, t, bezier) {
+  const eased = cubicBezierY(t, bezier);
+  const h = startVal + hueInterpDelta(startVal, endVal) * eased;
+  return Math.round(((h % 360) + 360) % 360);
 }
 
 /**
@@ -426,13 +583,14 @@ export function parseBrandHex(raw) {
 /**
  * Apply a brand color to engine state (headless + GUI).
  * - Picks the key step whose tone is nearest to the brand tone.
- * - `perfectFit`: bend LM key tone interpolator (minimal drift from current curve) so that step gets brand T.
+ * - `perfectFit`: bend LM key tone interpolator + set sticky `colorOverride` (exact hex).
+ * - `overrideNearest`: set sticky `colorOverride` only (no curve bend). Ignored if `perfectFit`.
  * - Sets brand custom palette LM hue/chroma to brand H/C. DM params untouched.
- * - Writes `state.brand` for config export / Perfect-fit hex override in `generateSystem`.
+ * - Writes `state.brand` for config export / re-apply on stepCount.
  *
  * @param {EngineState} state
  * @param {string} hex — `#rrggbb` or `rrggbb`
- * @param {{ perfectFit?: boolean, paletteId?: string }} [options]
+ * @param {{ perfectFit?: boolean, overrideNearest?: boolean, paletteId?: string }} [options]
  * @returns {{ hex: string, step: number, paletteId: string, hue: number, chroma: number, tone: number }}
  */
 export function applyBrandColor(state, hex, options = {}) {
@@ -442,14 +600,15 @@ export function applyBrandColor(state, hex, options = {}) {
   }
 
   const perfectFit = Boolean(options.perfectFit);
+  const overrideNearest = Boolean(options.overrideNearest) && !perfectFit;
   const hct = hexToHct(normalized);
   const steps = getSteps(state.stepCount);
   if (steps.length === 0) {
     throw new Error('stepCount must be at least 1');
   }
 
-  const keyResult = generateKeyPalette(state.keyPalette.lm, steps);
-  const step = nearestStepForTone(keyResult, steps, hct.tone);
+  let keyResult = generateKeyPalette(state.keyPalette.lm, steps);
+  let step = nearestStepForTone(keyResult, steps, hct.tone);
   const stepIndex = steps.indexOf(step);
   const tTarget = steps.length <= 1 ? 0 : stepIndex / (steps.length - 1);
 
@@ -466,6 +625,8 @@ export function applyBrandColor(state, hex, options = {}) {
     if (!state.keyPalette.dm.interpolatorOverride) {
       state.keyPalette.dm.interpolator = invertBezier(state.keyPalette.lm.interpolator);
     }
+    keyResult = generateKeyPalette(state.keyPalette.lm, steps);
+    step = nearestStepForTone(keyResult, steps, hct.tone);
   }
 
   if (!state.customPalettes.length) {
@@ -482,9 +643,14 @@ export function applyBrandColor(state, hex, options = {}) {
   palette.lm.hue = createFixedParam(hct.hue);
   palette.lm.chroma = createFixedParam(hct.chroma);
 
+  if (perfectFit || overrideNearest) {
+    setColorOverride(palette, normalized);
+  }
+
   state.brand = {
     hex: normalized,
     perfectFit,
+    overrideNearest,
     palette: palette.name,
   };
 
@@ -499,7 +665,7 @@ export function applyBrandColor(state, hex, options = {}) {
 }
 
 /**
- * Clear persisted brand seed (config + Perfect-fit override).
+ * Clear persisted brand seed. Does not clear palette `colorOverride` / `colorOverrideDm` (sticky).
  * @param {EngineState} state
  */
 export function clearBrandConfig(state) {
@@ -517,46 +683,200 @@ export function resolveBrandPalette(state) {
 }
 
 /**
- * After palette generate: with Perfect fit, force seed hex on the brand LM step (1:1).
- * Mutates `customResults` only. Not written as a separate config field — derived from `state.brand`.
+ * @param {string} raw
+ * @returns {ColorOverride | null}
+ */
+export function parseColorOverrideHex(raw) {
+  const hex = parseBrandHex(raw);
+  return hex ? { hex } : null;
+}
+
+/**
+ * @param {'lm' | 'dm'} [mode]
+ * @returns {'colorOverride' | 'colorOverrideDm'}
+ */
+function colorOverrideKey(mode = 'lm') {
+  return mode === 'dm' ? 'colorOverrideDm' : 'colorOverride';
+}
+
+/**
+ * @param {'lm' | 'dm'} [mode]
+ * @returns {'_colorOverrideStep' | '_colorOverrideStepDm'}
+ */
+function colorOverrideStepKey(mode = 'lm') {
+  return mode === 'dm' ? '_colorOverrideStepDm' : '_colorOverrideStep';
+}
+
+/**
+ * @param {CustomPaletteConfig & { id?: string, _colorOverrideStep?: number | null, _colorOverrideStepDm?: number | null }} palette
+ * @param {string | null} hex
+ * @param {'lm' | 'dm'} [mode]
+ */
+export function setColorOverride(palette, hex, mode = 'lm') {
+  const ovKey = colorOverrideKey(mode);
+  const stepKey = colorOverrideStepKey(mode);
+  if (!hex) {
+    palette[ovKey] = null;
+    palette[stepKey] = null;
+    if (mode === 'lm') palette._includeOffsets = null;
+    return;
+  }
+  const normalized = parseBrandHex(hex);
+  palette[ovKey] = normalized ? { hex: normalized } : null;
+  if (!palette[ovKey]) palette[stepKey] = null;
+  // Re-seed offsets on next sync from current includeSteps vs new override step.
+  if (mode === 'lm') palette._includeOffsets = null;
+}
+
+/**
+ * Nearest key step for a palette’s colorOverride / colorOverrideDm (or null).
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {'lm' | 'dm'} [mode]
+ * @returns {number | null}
+ */
+export function resolveColorOverrideStep(palette, keyResult, steps, mode = 'lm') {
+  const hex = parseBrandHex(palette[colorOverrideKey(mode)]?.hex ?? '');
+  if (!hex || !steps.length) return null;
+  return nearestStepForTone(keyResult, steps, hexToHct(hex).tone);
+}
+
+/**
+ * Ensure LM/DM interpolate points sit on the override step (nearest T); override wins slot conflicts.
+ * Mutates palette params. Call after step remaps / before generate.
+ * @param {EngineState} state
+ * @param {ReturnType<typeof generateKeyPalettes>} keyResults
+ */
+export function syncColorOverridePoints(state, keyResults) {
+  const steps = getSteps(state.stepCount);
+  for (const palette of state.customPalettes) {
+    syncPaletteColorOverridePoints(palette, 'lm', keyResults.lm, steps);
+    syncPaletteColorOverridePoints(palette, 'dm', keyResults.dm, steps);
+  }
+}
+
+/**
+ * @param {CustomPaletteConfig & { id?: string, _colorOverrideStep?: number | null, _colorOverrideStepDm?: number | null }} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ */
+function syncPaletteColorOverridePoints(palette, mode, keyResult, steps) {
+  const hex = parseBrandHex(palette[colorOverrideKey(mode)]?.hex ?? '');
+  if (!hex || !steps.length) return;
+
+  const hct = hexToHct(hex);
+  const step = nearestStepForTone(keyResult, steps, hct.tone);
+  const stepKey = colorOverrideStepKey(mode);
+  const prev = palette[stepKey];
+
+  for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
+    const param = palette[mode][paramName];
+    if (param.mode !== 'interpolate') continue;
+    const value = paramName === 'hue' ? hct.hue : hct.chroma;
+    placeOverrideInterpolatePoint(param, step, value, prev);
+  }
+
+  palette[stepKey] = step;
+}
+
+/**
+ * Place/update interpolate point at `step` with `value`. If step moved, drop previous middle point.
+ * Override always wins the target slot (reuses any point already there).
+ * @param {InterpolateParam} param
+ * @param {number} step
+ * @param {number} value
+ * @param {number | null | undefined} previousStep
+ */
+function placeOverrideInterpolatePoint(param, step, value, previousStep) {
+  if (
+    previousStep != null
+    && previousStep !== step
+  ) {
+    const prevIdx = param.points.findIndex((p) => p.step === previousStep);
+    if (prevIdx > 0 && prevIdx < param.points.length - 1) {
+      param.points.splice(prevIdx, 1);
+      if (prevIdx - 1 >= 0 && prevIdx - 1 < param.interpolators.length) {
+        param.interpolators.splice(prevIdx - 1, 1);
+      }
+    }
+  }
+
+  const existing = param.points.find((p) => p.step === step);
+  if (existing) {
+    existing.value = value;
+    delete existing.ratio;
+    delete existing.gamutLimit;
+    return;
+  }
+
+  const insertAt = param.points.findIndex((p) => p.step > step);
+  const idx = insertAt === -1 ? param.points.length : insertAt;
+  if (idx <= 0 || idx >= param.points.length) {
+    // Target is outside open interval — endpoints own first/last grid steps after remap.
+    if (param.points.length > 0 && param.points[0].step === step) {
+      param.points[0].value = value;
+      delete param.points[0].ratio;
+      delete param.points[0].gamutLimit;
+    } else if (param.points.length > 0 && param.points[param.points.length - 1].step === step) {
+      const last = param.points[param.points.length - 1];
+      last.value = value;
+      delete last.ratio;
+      delete last.gamutLimit;
+    }
+    return;
+  }
+
+  param.points.splice(idx, 0, { step, value });
+  param.interpolators.splice(idx - 1, 0, [...LINEAR_BEZIER]);
+}
+
+/**
+ * After palette generate: force each palette’s override hex on LM / DM nearest-T step (1:1).
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
  * @param {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} customResults
- * @returns {number | null} overridden step id, or null
  */
-export function applyBrandStepOverride(state, keyResults, customResults) {
-  if (!state.brand?.perfectFit) return null;
-  const hex = parseBrandHex(state.brand.hex);
-  if (!hex) return null;
-
-  const palette = resolveBrandPalette(state);
-  if (!palette) return null;
-  const results = customResults[palette.id];
-  if (!results?.lm?.steps) return null;
-
+export function applyColorOverrides(state, keyResults, customResults) {
   const steps = getSteps(state.stepCount);
-  const hct = hexToHct(hex);
-  const step = nearestStepForTone(keyResults.lm, steps, hct.tone);
-  const data = results.lm.steps[step];
-  if (!data) return null;
+  for (const palette of state.customPalettes) {
+    const results = customResults[palette.id];
+    if (!results) continue;
+    for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+      const hex = parseBrandHex(palette[colorOverrideKey(mode)]?.hex ?? '');
+      if (!hex || !results[mode]?.steps) continue;
 
-  results.lm.steps[step] = {
-    ...data,
-    hex,
-    hue: hct.hue,
-    chroma: hct.chroma,
-    tone: hct.tone,
-  };
-  return step;
+      const hct = hexToHct(hex);
+      const step = nearestStepForTone(keyResults[mode], steps, hct.tone);
+      const data = results[mode].steps[step];
+      if (!data) continue;
+
+      results[mode].steps[step] = {
+        ...data,
+        hex,
+        hue: hct.hue,
+        chroma: hct.chroma,
+        tone: hct.tone,
+      };
+    }
+  }
+}
+
+/** @deprecated Use applyColorOverrides — kept for older call sites. */
+export function applyBrandStepOverride(state, keyResults, customResults) {
+  applyColorOverrides(state, keyResults, customResults);
+  return null;
 }
 
 /**
  * @param {ParamConfig} config
  * @param {number} step
  * @param {number[]} steps
+ * @param {boolean} [asHue] — shortest-arc interpolate (hue only)
  * @returns {number}
  */
-export function resolveParam(config, step, steps) {
+export function resolveParam(config, step, steps, asHue = false) {
   if (config.mode === 'fixed') {
     return Math.round(config.value);
   }
@@ -582,7 +902,9 @@ export function resolveParam(config, step, steps) {
   const idx = segSteps.indexOf(step);
   const t = segSteps.length <= 1 ? 0 : idx / (segSteps.length - 1);
   const bezier = config.interpolators[segIdx] ?? [0, 0, 1, 1];
-  return interpolateValue(p0.value, p1.value, t, bezier);
+  return asHue
+    ? interpolateHue(p0.value, p1.value, t, bezier)
+    : interpolateValue(p0.value, p1.value, t, bezier);
 }
 
 // ---------------------------------------------------------------------------
@@ -620,7 +942,7 @@ export function clampChroma(chroma, hue, tone) {
 export function peakChromaForSteps(hueParam, keyResult, steps) {
   let peak = 0;
   for (const step of steps) {
-    const hue = resolveParam(hueParam, step, steps);
+    const hue = resolveParam(hueParam, step, steps, true);
     const tone = keyResult.steps[step].tone;
     peak = Math.max(peak, maxChromaForHueTone(hue, tone));
   }
@@ -643,7 +965,7 @@ export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) 
 
   let changed = false;
   for (const point of chromaParam.points) {
-    const hue = resolveParam(hueParam, point.step, steps);
+    const hue = resolveParam(hueParam, point.step, steps, true);
     const tone = keyResult.steps[point.step]?.tone;
     if (tone === undefined) continue;
     const next = clampChroma(point.value, hue, tone);
@@ -1014,7 +1336,7 @@ export function colorAtInteractionState(color, bgHex, states, level, pivotTone) 
  * @returns {number}
  */
 export function chromaLimitAtStep(hueParam, keyResult, steps, step) {
-  const hue = resolveParam(hueParam, step, steps);
+  const hue = resolveParam(hueParam, step, steps, true);
   const tone = keyResult.steps[step]?.tone;
   if (tone === undefined) return 0;
   return clampChroma(CHROMA_MAX, hue, tone);
@@ -1198,7 +1520,7 @@ export function generateCustomPaletteForMode(palette, mode, keyResult, steps) {
 
   for (const step of steps) {
     const tone = keyResult.steps[step].tone;
-    const hue = resolveParam(cfg.hue, step, steps);
+    const hue = resolveParam(cfg.hue, step, steps, true);
     const requested = resolveParam(cfg.chroma, step, steps);
     const chroma = isClampInterpolatedChroma(cfg.chroma)
       ? clampChroma(requested, hue, tone)
@@ -1303,17 +1625,17 @@ function remapInterpolatePointsForSteps(points, steps) {
 /**
  * Keep interpolate H/C points + LM pivotStep aligned with the current step grid (mutates state).
  * @param {EngineState} state
- * @param {number} [previousStepCount] — when set, remaps `pivotStep` proportionally from the old grid
+ * @param {number} [previousStepCount] — when set, remaps `pivotStep` (index); includeSteps follow `_includeTones`
  */
 export function normalizeStateForStepCount(state, previousStepCount) {
   const steps = getSteps(state.stepCount);
-
-  if (
+  const stepCountChanged = (
     typeof previousStepCount === 'number'
     && Number.isFinite(previousStepCount)
     && previousStepCount !== state.stepCount
-    && state.keyPalette?.lm?.states
-  ) {
+  );
+
+  if (stepCountChanged && state.keyPalette?.lm?.states) {
     const lmStates = /** @type {InteractionStatesConfig} */ (state.keyPalette.lm.states);
     lmStates.pivotStep = remapPivotStep(
       lmStates.pivotStep,
@@ -1332,9 +1654,10 @@ export function normalizeStateForStepCount(state, previousStepCount) {
     );
   }
 
-  for (const palette of state.customPalettes) {
-    palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
+  const keyResults = generateKeyPalettes(state.keyPalette, steps);
+  syncIncludeStepsFromTones(state, keyResults.lm, steps);
 
+  for (const palette of state.customPalettes) {
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
       for (const param of /** @type {const} */ (['hue', 'chroma'])) {
         const cfg = palette[mode][param];
@@ -1350,6 +1673,9 @@ export function normalizeStateForStepCount(state, previousStepCount) {
       }
     }
   }
+
+  // Override step = nearest T (wins conflicts); after proportional remap.
+  syncColorOverridePoints(state, keyResults);
 }
 
 /**
@@ -1414,6 +1740,10 @@ export function createCustomPalette(name = 'palette-1') {
     id: `palette-${nextId++}`,
     name: sanitizePaletteName(name),
     includeSteps: null,
+    _includeTones: null,
+    _includeOffsets: null,
+    colorOverride: null,
+    colorOverrideDm: null,
     lm: {
       hue: createFixedParam(210),
       chroma: createFixedParam(48),
@@ -1713,16 +2043,20 @@ export function exportEngineConfig(state) {
     version: ENGINE_CONFIG_VERSION,
     stepCount: state.stepCount,
     keyPalette,
-    customPalettes: state.customPalettes.map(({ name, includeSteps, lm, dm }) => {
+    customPalettes: state.customPalettes.map(({ name, includeSteps, colorOverride, colorOverrideDm, lm, dm }) => {
       const published = resolveIncludeSteps(includeSteps, steps);
       const normalized = normalizeIncludeSteps(includeSteps, steps);
-      /** @type {{ name: string, includeSteps?: number[], lm: unknown, dm: unknown }} */
+      /** @type {{ name: string, includeSteps?: number[], colorOverride?: ColorOverride, colorOverrideDm?: ColorOverride, lm: unknown, dm: unknown }} */
       const paletteOut = {
         name: sanitizePaletteName(name),
         lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps, published),
         dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps, published),
       };
       if (normalized) paletteOut.includeSteps = normalized;
+      const ovHex = parseBrandHex(colorOverride?.hex ?? '');
+      if (ovHex) paletteOut.colorOverride = { hex: ovHex };
+      const ovDmHex = parseBrandHex(colorOverrideDm?.hex ?? '');
+      if (ovDmHex) paletteOut.colorOverrideDm = { hex: ovDmHex };
       return paletteOut;
     }),
   };
@@ -1733,6 +2067,7 @@ export function exportEngineConfig(state) {
       out.brand = {
         hex,
         perfectFit: Boolean(state.brand.perfectFit),
+        overrideNearest: Boolean(state.brand.overrideNearest) && !state.brand.perfectFit,
         palette: sanitizePaletteName(state.brand.palette),
       };
     }
@@ -1783,6 +2118,8 @@ export function importEngineConfig(data) {
       id: `palette-${nextId++}`,
       name: sanitizePaletteName(typeof palette.name === 'string' ? palette.name : 'palette'),
       includeSteps: Array.isArray(palette.includeSteps) ? palette.includeSteps : null,
+      colorOverride: parseColorOverrideConfig(palette.colorOverride, 'colorOverride'),
+      colorOverrideDm: parseColorOverrideConfig(palette.colorOverrideDm, 'colorOverrideDm'),
       lm: {
         hue: parseParamConfig(palette.lm?.hue),
         chroma: parseParamConfig(palette.lm?.chroma),
@@ -1808,7 +2145,7 @@ export function importEngineConfig(data) {
   );
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
   for (const palette of state.customPalettes) {
-    palette.includeSteps = normalizeIncludeSteps(palette.includeSteps, steps);
+    setIncludeStepsIntent(palette, palette.includeSteps, keyPalettes.lm, steps);
     const published = resolveIncludeSteps(palette.includeSteps, steps);
     if (published.length === 1) {
       collapseParamsForSingleIncludeStep(palette, steps);
@@ -1819,7 +2156,32 @@ export function importEngineConfig(data) {
   }
 
   state.brand = parseBrandConfig(data.brand, state.customPalettes);
+  // Legacy / brand modes that set hex lock → ensure colorOverride on brand palette.
+  if (state.brand && (state.brand.perfectFit || state.brand.overrideNearest)) {
+    const brandPalette = resolveBrandPalette(state);
+    if (brandPalette && !brandPalette.colorOverride) {
+      setColorOverride(brandPalette, state.brand.hex);
+    }
+  }
+  syncColorOverridePoints(state, keyPalettes);
   return state;
+}
+
+/**
+ * @param {unknown} raw
+ * @param {string} [label]
+ * @returns {ColorOverride | null}
+ */
+function parseColorOverrideConfig(raw, label = 'colorOverride') {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`${label} must be an object or omitted`);
+  }
+  const hex = parseBrandHex(/** @type {{ hex?: unknown }} */ (raw).hex);
+  if (!hex) {
+    throw new Error(`${label}.hex must be a hex color (#rrggbb)`);
+  }
+  return { hex };
 }
 
 /**
@@ -1839,18 +2201,21 @@ function parseBrandConfig(raw, customPalettes) {
     throw new Error('brand.hex must be a hex color (#rrggbb)');
   }
   const perfectFit = Boolean(/** @type {{ perfectFit?: unknown }} */ (raw).perfectFit);
+  const overrideNearest = Boolean(/** @type {{ overrideNearest?: unknown }} */ (raw).overrideNearest)
+    && !perfectFit;
   const paletteRaw = /** @type {{ palette?: unknown }} */ (raw).palette;
 
   if (typeof paletteRaw === 'string' && paletteRaw.trim()) {
     const paletteName = sanitizePaletteName(paletteRaw);
     // Orphan name (typo / deleted palette) → drop brand; never silently remap.
     if (!customPalettes.some((p) => p.name === paletteName)) return null;
-    return { hex, perfectFit, palette: paletteName };
+    return { hex, perfectFit, overrideNearest, palette: paletteName };
   }
 
   return {
     hex,
     perfectFit,
+    overrideNearest,
     palette: sanitizePaletteName(customPalettes[0].name),
   };
 }
@@ -2015,8 +2380,13 @@ export function generateSystem(state) {
   const endStep = getEndStep(state.stepCount);
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
 
+  // Whitelist with colorOverride: keep offsets around override step (hex T).
+  syncIncludeStepsFromTones(state, keyPalettes.lm, steps, { requireColorOverride: true });
+
   applyRelativeCustomChroma(state.customPalettes, keyPalettes, steps);
   clampAllCustomChroma(state.customPalettes, keyPalettes, steps);
+  // After chroma remap: lock override interp points to hex H/C (nearest T wins).
+  syncColorOverridePoints(state, keyPalettes);
 
   /** @type {Record<string, { lm: ReturnType<typeof generateCustomPaletteForMode>, dm: ReturnType<typeof generateCustomPaletteForMode> }>} */
   const customPalettes = {};
@@ -2027,7 +2397,7 @@ export function generateSystem(state) {
     };
   }
 
-  applyBrandStepOverride(state, keyPalettes, customPalettes);
+  applyColorOverrides(state, keyPalettes, customPalettes);
 
   return {
     steps,

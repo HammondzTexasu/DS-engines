@@ -62,9 +62,10 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 **Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce; `min`/`max` se tímto filtrem neřeší (vždy).
 * `null` / vynecháno / celá mřížka → publikuje se vše (`10-20-…-end`)
 * např. `[40]` nebo `[20, 40, 60]` → jen tyto kroky
+* Intent: bez override = `_includeTones` (T-remap při `stepCount`); s LM `colorOverride` = `_includeOffsets` od override stepu (hex T) — key změna i `stepCount`. Do JSON jdou jen step id.
 * **1 published krok:** Fixed vs Interpolate nemá smysl — chroma se chová jako interpolate bod (relative % gamutu). Při 2+ krocích zůstává Fixed/Interpolate jako dřív.
 
-**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků. `includeSteps` se po změně `stepCount` znovu normalizuje proti nové mřížce.
+**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků. `includeSteps` se drží přes `_includeTones` (viz výše).
 
 **Názvy custom palet:** jen `a–z`, `0–9`, `-` (stejný tvar v configu i v názvech CSS tokenů).
 
@@ -76,16 +77,32 @@ Založení škály z konkrétní barvy (headless i GUI). Seed se ukládá do con
 "brand": {
   "hex": "#cc0000",
   "perfectFit": true,
+  "overrideNearest": false,
   "palette": "palette-1"
 }
 ```
 
 * Najde key krok s tone nejbližším seed T.
-* **`perfectFit: false`:** jen nastaví LM hue + chroma u brand custom palety (podle `paletteId` / jména `palette`, default první). Override hexu se neaplikuje.
-* **`perfectFit: true`:** navíc ohne aktuální LM `key-tone-interpolator` (minimální odchylka od současné křivky), aby ten krok měl seed T, a při `generateSystem` **vynutí seed hex 1:1** na tom LM kroku (hex override při generování — křivka + HCT zaokrouhlení jinak hex mírně posunou). DM zůstává default (invert LM, pokud není override).
-* API: `applyBrandColor(state, hex, { perfectFit, paletteId? })`, `clearBrandConfig(state)`, `applyBrandStepOverride` (volá ho `generateSystem`).
-* **Import** obnoví jen `state.brand` (a GUI link) — **ne** znovu ohýbá křivku; H/C a interpolátor už jsou v configu. Hex override běží až při generování. `brand.palette` musí sedět na existující custom paletu, jinak se `brand` při importu **zahodí**.
-* **GUI:** link zrcadlí `state.brand`; při změně `stepCount` a zapnutém Perfect fit se seed znovu aplikuje (`applyBrandColor`). Ruční edit LM H/C brand palety / smazání linku / vypnutí Perfect fit → `brand` z configu pryč; **ohnutá LM křivka zůstává**, dokud ji uživatel nezmění.
+* **Ani jedno:** jen nastaví LM hue + chroma u brand custom palety. Hex override se nenastavuje.
+* **`overrideNearest: true`:** nastaví na paletě **`colorOverride`** (přesný hex na nearest-T kroku), **bez** ohybu křivky. Mutex s Perfect fit.
+* **`perfectFit: true`:** ohne LM `key-tone-interpolator` + nastaví **`colorOverride`**. Mutex s Override nearest (při obou v JSON vyhraje Perfect fit).
+* API: `applyBrandColor(state, hex, { perfectFit, overrideNearest, paletteId? })`, `clearBrandConfig(state)`, `setColorOverride` / `applyColorOverrides`.
+* **Import** obnoví `state.brand` (GUI link / dokumentace seedu) — **ne** znovu ohýbá křivku. Starý config s `perfectFit` / `overrideNearest` bez `colorOverride` → override se doplní. Orphan `brand.palette` → `brand` se zahodí.
+* **GUI:** Brand hex + PF/OV zůstávají, dokud platí palette Override color / zapnuté PF·OV (edit H/C je neshazuje). Reset brand: vypnutí Override u palety, smazání brand hexu, nebo drift H/C u **seed-only** brandu (bez PF/OV a bez `colorOverride`). Ruční edit key křivky odlinkuje brand (křivku nechá).
+## 4c. Override color (per palette)
+
+Sticky hex lock na **libovolné** custom paletě — LM a DM **odděleně**, stejná pravidla:
+
+```json
+"colorOverride": { "hex": "#cc0000" },
+"colorOverrideDm": { "hex": "#3366ff" }
+```
+
+* Krok = vždy **nearest key T** daného módu k tonu hexu (při změně `stepCount` / key křivky se přesune; override vyhraje slot).
+* Při generate vynutí přesný hex na tom kroku (LM → `colorOverride`, DM → `colorOverrideDm`). Edit H/C override **nemaze**.
+* Interpolate: na tom kroku je control point (křivka platí), step + value **read-only**.
+* GUI: Hue & Chroma (LM) / (DM) → toggle Override color + hex + info step.
+* Brand (`perfectFit` / `overrideNearest`) sahá jen na LM `colorOverride`.
 
 ## 5. Interaction states (delta T → delivery)
 
