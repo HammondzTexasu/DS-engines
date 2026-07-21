@@ -41,6 +41,7 @@ import {
   parseIncludeStepsInput,
   resolveIncludeSteps,
   normalizeIncludeSteps,
+  isFullIncludeSteps,
   setIncludeStepsIntent,
   collapseParamsForSingleIncludeStep,
   isSingleIncludeStep,
@@ -953,15 +954,16 @@ function refreshPreviews() {
     }
   }
 
-  patchPreviewRow('key-lm', keyPalettes.lm, steps, endStep, 'tone');
-  patchPreviewRow('key-dm', keyPalettes.dm, steps, endStep, 'tone');
+  patchPreviewRow('key-lm', keyPalettes.lm, steps, endStep, 'tone', true);
+  patchPreviewRow('key-dm', keyPalettes.dm, steps, endStep, 'tone', true);
 
   for (const palette of state.customPalettes) {
     const results = customPalettes[palette.id];
     if (!results) continue;
     const published = resolveIncludeSteps(palette.includeSteps, steps);
-    patchPreviewRow(`custom-${palette.id}-lm`, results.lm, published, endStep, 'hc');
-    patchPreviewRow(`custom-${palette.id}-dm`, results.dm, published, endStep, 'hc');
+    const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
+    patchPreviewRow(`custom-${palette.id}-lm`, results.lm, published, endStep, 'hc', includePoles);
+    patchPreviewRow(`custom-${palette.id}-dm`, results.dm, published, endStep, 'hc', includePoles);
 
     const includeInput = app.querySelector(`#include-steps-${palette.id}`);
     if (includeInput instanceof HTMLInputElement) {
@@ -1005,32 +1007,46 @@ function scheduleRefreshPreviews() {
  * @param {number[]} steps
  * @param {number} endStep
  * @param {'tone' | 'hue' | 'chroma' | 'hc'} valueFormat
+ * @param {boolean} [includePoles=true] — min (`0`) / max swatches; false when includeSteps is partial
  */
-function patchPreviewRow(previewId, paletteResult, steps, endStep, valueFormat) {
+function patchPreviewRow(previewId, paletteResult, steps, endStep, valueFormat, includePoles = true) {
   const row = app.querySelector(`[data-preview="${previewId}"]`);
   if (!row) return;
 
   if (row instanceof HTMLElement) {
+    // Always key-grid + poles slots so whitelist rows don't stretch cells.
     row.style.setProperty('--swatch-cols', String(getSteps(state.stepCount).length + 2));
   }
 
   const wraps = row.querySelectorAll(':scope > .swatch-wrap');
-  const expectedCount = steps.length + 2;
+  const expectedCount = steps.length + (includePoles ? 2 : 0);
 
   if (wraps.length !== expectedCount) {
-    replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat, getEditOptions(previewId));
+    replacePreviewRow(
+      previewId, paletteResult, steps, endStep, valueFormat, getEditOptions(previewId), includePoles,
+    );
     return;
   }
 
   let i = 0;
-  patchSwatchWrap(wraps[i], '0', paletteResult.min, null, valueFormat);
-  i += 1;
+  if (includePoles) {
+    patchSwatchWrap(wraps[i], '0', paletteResult.min, null, valueFormat);
+    patchGhostZeroPreview(
+      wraps[i].querySelector('.swatch'),
+      paletteResult.min,
+      paletteResult.steps[steps[0]]?.hex,
+      paletteResult.steps[steps[1]]?.hex,
+    );
+    i += 1;
+  }
   for (const step of steps) {
     const data = paletteResult.steps[step];
     patchSwatchWrap(wraps[i], String(step), data.hex, data, valueFormat);
     i += 1;
   }
-  patchSwatchWrap(wraps[i], String(endStep + 10), paletteResult.max, null, valueFormat);
+  if (includePoles) {
+    patchSwatchWrap(wraps[i], String(endStep + 10), paletteResult.max, null, valueFormat);
+  }
 }
 
 /**
@@ -1195,11 +1211,12 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
   nameEl.textContent = name;
 
   const pickerActive = colorEl.classList.contains('hct-picker-open');
+  const ghostActive = colorEl._ghostZero && colorEl._ghostZero.level !== 0;
   const interactionActive = colorEl.classList.contains('swatch-interactive')
     && colorEl._interaction
     && colorEl._interaction.level !== 0;
 
-  if (!pickerActive && !interactionActive) {
+  if (!pickerActive && !interactionActive && !ghostActive) {
     setSwatchFaceColor(colorEl, hex);
     if (colorEl._currentHex !== undefined) {
       colorEl._currentHex = hex;
@@ -1218,7 +1235,7 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
     } else {
       valueEl.textContent = restLabel;
     }
-  } else {
+  } else if (!colorEl._ghostZero) {
     valueEl.textContent = formatSwatchValue(data, valueFormat);
   }
 
@@ -1226,10 +1243,14 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
   const isEditable = colorEl.classList.contains('swatch-editable');
   const isInteractive = colorEl.classList.contains('swatch-interactive');
   colorEl.title = isEditable
-    ? `${name}: ${hex}\nKlikni pro změnu barvy`
-    : isInteractive
-      ? `${name}: ${hex}\nHover = state1, pressed = state2`
-      : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
+    ? (colorEl._ghostZero
+      ? `${name}: ${hex}\nKlikni pro změnu barvy\nHover = 10, pressed = 20`
+      : `${name}: ${hex}\nKlikni pro změnu barvy`)
+    : colorEl._ghostZero
+      ? `${name}: ${hex}\nHover = 10, pressed = 20`
+      : isInteractive
+        ? `${name}: ${hex}\nHover = state1, pressed = state2`
+        : valueText ? `${name}: ${hex}\n${valueText}` : `${name}: ${hex}`;
 }
 
 /**
@@ -1299,8 +1320,11 @@ function getInteractionForPreview(previewId) {
  * @param {number} endStep
  * @param {'tone' | 'hue' | 'chroma' | 'hc'} valueFormat
  * @param {object} [editOptions]
+ * @param {boolean} [includePoles=true]
  */
-function replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat, editOptions = null) {
+function replacePreviewRow(
+  previewId, paletteResult, steps, endStep, valueFormat, editOptions = null, includePoles = true,
+) {
   const existing = app.querySelector(`[data-preview="${previewId}"]`);
   if (!existing) return;
   const textMode = getTextMode(previewId);
@@ -1312,6 +1336,7 @@ function replacePreviewRow(previewId, paletteResult, steps, endStep, valueFormat
     editOptions,
     textMode,
     getInteractionForPreview(previewId),
+    includePoles,
   );
   row.dataset.preview = previewId;
   existing.replaceWith(row);
@@ -2071,6 +2096,7 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
 
   const tokenName = palette.name;
   const publishedSteps = resolveIncludeSteps(palette.includeSteps, steps);
+  const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
   const singleStep = isSingleIncludeStep(palette.includeSteps, steps)
     ? publishedSteps[0]
     : null;
@@ -2091,7 +2117,9 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
     label.textContent = modeLabel;
     segment.appendChild(label);
 
-    const swatchRow = createSwatchRow(customResult, publishedSteps, endStep, 'hc', null, mode, createInteractionHandlers(mode));
+    const swatchRow = createSwatchRow(
+      customResult, publishedSteps, endStep, 'hc', null, mode, createInteractionHandlers(mode), includePoles,
+    );
     swatchRow.dataset.preview = `custom-${palette.id}-${mode}`;
     segment.appendChild(swatchRow);
 
@@ -2720,21 +2748,34 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
  *   getBgHex: () => string,
  *   getStates: () => import('../src/color-engine.js').InteractionStatesConfig,
  * } | null} [interaction]
+ * @param {boolean} [includePoles=true] — min (`0`) / max; false when includeSteps is partial
  */
-function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', editOptions = null, textMode = 'lm', interaction = null) {
+function createSwatchRow(
+  paletteResult, steps, endStep, valueFormat = 'tone', editOptions = null, textMode = 'lm',
+  interaction = null, includePoles = true,
+) {
   const row = document.createElement('div');
   row.className = 'swatch-row';
   row.dataset.textMode = textMode;
-  // Always size cells like the key palette grid (whitelist may show fewer swatches).
+  // Always key-grid + poles slots so whitelist rows don't stretch cells.
   row.style.setProperty('--swatch-cols', String(getSteps(state.stepCount).length + 2));
 
-  row.appendChild(createSwatch('0', paletteResult.min, null, valueFormat, editOptions?.onMinChange
-    ? {
-      onChange: editOptions.onMinChange,
-      onDone: editOptions.onEditDone,
-      memoryKey: editOptions.minMemoryKey,
-    }
-    : null, null));
+  if (includePoles) {
+    const zeroWrap = createSwatch('0', paletteResult.min, null, valueFormat, editOptions?.onMinChange
+      ? {
+        onChange: editOptions.onMinChange,
+        onDone: editOptions.onEditDone,
+        memoryKey: editOptions.minMemoryKey,
+      }
+      : null, null);
+    attachGhostZeroPreview(
+      zeroWrap.querySelector('.swatch'),
+      paletteResult.min,
+      paletteResult.steps[steps[0]]?.hex,
+      paletteResult.steps[steps[1]]?.hex,
+    );
+    row.appendChild(zeroWrap);
+  }
 
   for (const step of steps) {
     const data = paletteResult.steps[step];
@@ -2748,13 +2789,15 @@ function createSwatchRow(paletteResult, steps, endStep, valueFormat = 'tone', ed
     ));
   }
 
-  row.appendChild(createSwatch(String(endStep + 10), paletteResult.max, null, valueFormat, editOptions?.onMaxChange
-    ? {
-      onChange: editOptions.onMaxChange,
-      onDone: editOptions.onEditDone,
-      memoryKey: editOptions.maxMemoryKey,
-    }
-    : null, null));
+  if (includePoles) {
+    row.appendChild(createSwatch(String(endStep + 10), paletteResult.max, null, valueFormat, editOptions?.onMaxChange
+      ? {
+        onChange: editOptions.onMaxChange,
+        onDone: editOptions.onEditDone,
+        memoryKey: editOptions.maxMemoryKey,
+      }
+      : null, null));
+  }
 
   return row;
 }
@@ -2815,6 +2858,77 @@ function createSwatch(name, hex, data, valueFormat, editHandler = null, interact
 
   wrap.appendChild(color);
   return wrap;
+}
+
+/**
+ * Ghost pole `0`: hover = hex of step 10, pressed = hex of step 20. Face only — no value label.
+ * @param {Element | null} colorEl
+ * @param {string} restHex
+ * @param {string | undefined} hoverHex
+ * @param {string | undefined} pressedHex
+ */
+function attachGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex) {
+  if (!(colorEl instanceof HTMLElement) || !hoverHex || !pressedHex) return;
+  if (colorEl._ghostZero) {
+    patchGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex);
+    return;
+  }
+
+  colorEl.classList.add('swatch-interactive');
+  colorEl._ghostZero = {
+    restHex,
+    hoverHex,
+    pressedHex,
+    level: /** @type {0 | 1 | 2} */ (0),
+  };
+  colorEl.title = colorEl.classList.contains('swatch-editable')
+    ? `0: ${restHex}\nKlikni pro změnu barvy\nHover = 10, pressed = 20`
+    : `0: ${restHex}\nHover = 10, pressed = 20`;
+
+  const showLevel = (level) => {
+    const g = colorEl._ghostZero;
+    if (!g || colorEl.classList.contains('hct-picker-open')) return;
+    g.level = level;
+    const hex = level === 2 ? g.pressedHex : level === 1 ? g.hoverHex : g.restHex;
+    setSwatchFaceColor(colorEl, hex);
+  };
+
+  colorEl.addEventListener('pointerenter', () => {
+    if (colorEl._ghostZero?.level === 2) return;
+    showLevel(1);
+  });
+  colorEl.addEventListener('pointerleave', () => showLevel(0));
+  colorEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    showLevel(2);
+  });
+  colorEl.addEventListener('pointerup', () => {
+    if (colorEl.matches(':hover')) showLevel(1);
+    else showLevel(0);
+  });
+  colorEl.addEventListener('pointercancel', () => showLevel(0));
+}
+
+/**
+ * @param {Element | null} colorEl
+ * @param {string} restHex
+ * @param {string | undefined} hoverHex
+ * @param {string | undefined} pressedHex
+ */
+function patchGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex) {
+  if (!(colorEl instanceof HTMLElement) || !colorEl._ghostZero) return;
+  if (!hoverHex || !pressedHex) return;
+  const g = colorEl._ghostZero;
+  g.restHex = restHex;
+  g.hoverHex = hoverHex;
+  g.pressedHex = pressedHex;
+  if (g.level === 0 && !colorEl.classList.contains('hct-picker-open')) {
+    setSwatchFaceColor(colorEl, restHex);
+  } else if (g.level === 1) {
+    setSwatchFaceColor(colorEl, hoverHex);
+  } else if (g.level === 2) {
+    setSwatchFaceColor(colorEl, pressedHex);
+  }
 }
 
 /**

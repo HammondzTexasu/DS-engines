@@ -59,9 +59,9 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 
 **Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
 
-**Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce; `min`/`max` se tímto filtrem neřeší (vždy).
-* `null` / vynecháno / celá mřížka → publikuje se vše (`10-20-…-end`)
-* např. `[40]` nebo `[20, 40, 60]` → jen tyto kroky
+**Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce.
+* `null` / vynecháno / celá mřížka → publikuje se vše včetně `0` / `max` (`10-20-…-end`) + ghost `--*-0-state1|2`
+* např. `[40]` nebo `[20, 40, 60]` → jen tyto kroky (**bez** `0` / `max` / ghost `0-state*`)
 * Intent: bez override = `_includeTones` (T-remap při `stepCount`); s LM `colorOverride` = `_includeOffsets` od override stepu (hex T) — key změna i `stepCount`. Do JSON jdou jen step id.
 * **1 published krok:** Fixed vs Interpolate nemá smysl — chroma se chová jako interpolate bod (relative % gamutu). Při 2+ krocích zůstává Fixed/Interpolate jako dřív.
 
@@ -106,7 +106,7 @@ Sticky hex lock na **libovolné** custom paletě — LM a DM **odděleně**, ste
 
 ## 5. Interaction states (delta T → delivery)
 
-Stavy na **krocích palety** (ne `min`/`max`).
+Stavy na **krocích palety** (ne `min`/`max` — až na ghost níže).
 
 * **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`, `pivotStep`
 * **Per mode deltas:** `deltaMin` / `deltaMax` / `state2Scale` — LM i DM (DM config má jen tyto tři)
@@ -115,13 +115,14 @@ Stavy na **krocích palety** (ne `min`/`max`).
 * **`bg`** = povrch za barvou (playground: key `min`) — do matiky jde jeho HCT T
 * **state1** = 1×; **state2** = × `state2Scale` — výsledné |Δ| / signed Δ se bere na **1 desetinu** (build i runtime tokeny)
 * **OKLCH / runtime** jen provedení: stejné Δ z T se přičte k OKLCH L (případně relative C / gamut)
+* **Ghost `0`:** na full paletách (key + custom bez partial whitelist) `--*-0-state1` → `var(--*-10)`, `--*-0-state2` → `var(--*-20)` (grid jump, ne Δ; build i runtime). Playground u swatche `0`: hover/pressed fill preview (bez T/L labelu).
 
 ### Delivery
 
 | `delivery` | Space | Relative chroma | CSS tokeny |
 | :--- | :--- | :--- | :--- |
-| **`build`** (default) | `hct` nebo `oklch` | volitelně | `--{prefix}-{step}-state1` / `state2` (hex) |
-| **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (Δ z T; kotva = key krok; aplikace jako OKLCH L) |
+| **`build`** (default) | `hct` nebo `oklch` | volitelně | `--{prefix}-{step}-state1` / `state2` (hex); full: `--*-0-state1|2` → `var(--*-10|20)` |
+| **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (Δ z T); full: `--*-0-state1|2` → `var(--*-10|20)` |
 
 * Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: runtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
 * Runtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token je 0–100, CSS `l` je 0–1.

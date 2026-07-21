@@ -2226,14 +2226,17 @@ function parseBrandConfig(raw, customPalettes) {
 
 /**
  * @param {object} result
- * @param {number[]} steps — published grid steps (min/max always emitted separately)
+ * @param {number[]} steps — published grid steps
  * @param {number} endStep
  * @param {string} prefix
  * @param {string[]} lines
  * @param {'tone' | 'hc'} format
+ * @param {boolean} [includePoles=true] — emit min (`0`) / max (`end+10`); false for partial includeSteps
  */
-function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format) {
-  lines.push(`  --${prefix}-0: ${result.min};`);
+function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format, includePoles = true) {
+  if (includePoles) {
+    lines.push(`  --${prefix}-0: ${result.min};`);
+  }
   for (const step of steps) {
     const data = result.steps[step];
     if (!data) continue;
@@ -2243,7 +2246,21 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format)
       lines.push(`  --${prefix}-${step}: ${data.hex}; /* H: ${data.hue}, C: ${data.chroma} */`);
     }
   }
-  lines.push(`  --${prefix}-${endStep + 10}: ${result.max};`);
+  if (includePoles) {
+    lines.push(`  --${prefix}-${endStep + 10}: ${result.max};`);
+  }
+}
+
+/**
+ * Ghost poles: `--*-0-state1` → `var(--*-{first})`, `--*-0-state2` → `var(--*-{second})`.
+ * Grid jump (not interaction Δ). Build + runtime.
+ * @param {number[]} steps
+ * @param {string} prefix
+ * @param {string[]} lines
+ */
+function appendGhostZeroStateTokens(steps, prefix, lines) {
+  if (steps[0] != null) lines.push(`  --${prefix}-0-state1: var(--${prefix}-${steps[0]});`);
+  if (steps[1] != null) lines.push(`  --${prefix}-0-state2: var(--${prefix}-${steps[1]});`);
 }
 
 /**
@@ -2300,7 +2317,8 @@ function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bg
  * Build `:root { … }` CSS custom properties — **colors only** (min / steps / max + interaction states).
  * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
- * Custom palettes emit only `includeSteps` (full grid when null); min/max always.
+ * Custom: `includeSteps` filter; partial whitelist omits min/max + ghost `0-state*`.
+ * Full palettes: `--*-0-state1|2` = `var(--*-10|20)` (grid jump; build + runtime).
  * Runtime: universal `--state-{step}-state1|2` / `--state-dm-…` (Δ from HCT T, applied as OKLCH L; key-step anchored).
  * @param {EngineState} state
  * @param {ReturnType<typeof generateKeyPalettes>} keyResults
@@ -2318,12 +2336,14 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   const dmPivotTone = resolvePivotTone(dmStates, keyResults.dm, steps);
 
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
+  appendGhostZeroStateTokens(steps, KEY_PALETTE_NAME, lines);
   if (!runtime) {
     appendBuildInteractionStateTokens(
       keyResults.lm, steps, KEY_PALETTE_NAME, lines, lmStates, keyResults.lm.min, lmPivotTone,
     );
   }
   appendPaletteColorTokens(keyResults.dm, steps, endStep, `${KEY_PALETTE_NAME}-dm`, lines, 'tone');
+  appendGhostZeroStateTokens(steps, `${KEY_PALETTE_NAME}-dm`, lines);
   if (!runtime) {
     appendBuildInteractionStateTokens(
       keyResults.dm, steps, `${KEY_PALETTE_NAME}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
@@ -2336,13 +2356,16 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
     if (!results) continue;
 
     const published = resolveIncludeSteps(palette.includeSteps, steps);
-    appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc');
+    const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
+    appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc', includePoles);
+    if (includePoles) appendGhostZeroStateTokens(steps, name, lines);
     if (!runtime) {
       appendBuildInteractionStateTokens(
         results.lm, published, name, lines, lmStates, keyResults.lm.min, lmPivotTone,
       );
     }
-    appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc');
+    appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc', includePoles);
+    if (includePoles) appendGhostZeroStateTokens(steps, `${name}-dm`, lines);
     if (!runtime) {
       appendBuildInteractionStateTokens(
         results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
@@ -2356,6 +2379,7 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
       '  /* Runtime interaction states — signed Δ from HCT T math, applied as OKLCH L (0–100).',
       '   * CSS relative `l` is 0–1, so divide the token by 100:',
       '   *   background: oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h);',
+      '   * Ghost poles (full palettes only): --*-0-state1|2 → var(--*-10|20) (not Δ).',
       '   * LM: --state-{step}-state1|state2',
       '   * DM: --state-dm-{step}-state1|state2',
       '   */',

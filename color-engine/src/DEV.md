@@ -107,7 +107,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 
 * `version` — musí sedět s `ENGINE_CONFIG_VERSION` (aktuálně `1`), jinak `importEngineConfig` hodí chybu.
 * `customPalettes[].name` — sanitizuje se (`a–z`, `0–9`, `-`); runtime `id` se do JSON **neukládá**.
-* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše. Jinak unikátní seřazené step id. Bez override: `_includeTones` + T-remap při `stepCount`. S LM `colorOverride`: `_includeOffsets` od override stepu (hex T) při key změně i `stepCount`. Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
+* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše včetně `0`/`max` + ghost `0-state*`. Jinak unikátní seřazené step id (**bez** pólů). Bez override: `_includeTones` + T-remap při `stepCount`. S LM `colorOverride`: `_includeOffsets` od override stepu (hex T) při key změně i `stepCount`. Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
 * **`brand`** (volitelné) — `{ hex, perfectFit, overrideNearest, palette }`; `perfectFit` ⊥ `overrideNearest` (PF vyhraje). Orphan `palette` → drop brand.
 * **`customPalettes[].colorOverride`** (volitelné) — `{ hex }`; sticky LM hex lock; step = nearest key T (neukládá se).
 * **`customPalettes[].colorOverrideDm`** (volitelné) — totéž pro DM; nezávislé na LM.
@@ -232,7 +232,8 @@ Příklady jmen (po `sanitizePaletteName`):
 
 * `--key-palette-0`, `--key-palette-10`, …, `--key-palette-{end+10}`
 * totéž pro DM: `--key-palette-dm-…`
-* custom: `--{name}-10`, … (jen kroky z `includeSteps`; `0` a `end+10` vždy), `--{name}-dm-…`
+* full custom: stejně včetně `0` / `end+10` + `--*-0-state1|2` → `var(--*-10|20)`
+* partial `includeSteps`: jen whitelisted kroky (**bez** `0` / `max` / ghost `0-state*`), `--{name}-dm-…`
 
 U kroků palety jsou v komentáři T (key) nebo H/C (custom).
 
