@@ -2891,7 +2891,7 @@ function attachGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex) {
 
   const showLevel = (level) => {
     const g = colorEl._ghostZero;
-    if (!g || colorEl.classList.contains('hct-picker-open')) return;
+    if (!g) return;
     g.level = level;
     const hex = level === 2 ? g.pressedHex : level === 1 ? g.hoverHex : g.restHex;
     setSwatchFaceColor(colorEl, hex);
@@ -2926,13 +2926,8 @@ function patchGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex) {
   g.restHex = restHex;
   g.hoverHex = hoverHex;
   g.pressedHex = pressedHex;
-  if (g.level === 0 && !colorEl.classList.contains('hct-picker-open')) {
-    setSwatchFaceColor(colorEl, restHex);
-  } else if (g.level === 1) {
-    setSwatchFaceColor(colorEl, hoverHex);
-  } else if (g.level === 2) {
-    setSwatchFaceColor(colorEl, pressedHex);
-  }
+  const hex = g.level === 2 ? g.pressedHex : g.level === 1 ? g.hoverHex : g.restHex;
+  setSwatchFaceColor(colorEl, hex);
 }
 
 /**
