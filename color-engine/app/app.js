@@ -1254,6 +1254,7 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
 
 /**
  * Ensure LM has full states; DM has deltas only (strip shared keys from legacy configs).
+ * Always normalize in place so UI sliders keep a stable object reference.
  * @param {'lm' | 'dm'} mode
  */
 function ensureKeyModeStates(mode) {
@@ -1261,7 +1262,13 @@ function ensureKeyModeStates(mode) {
     if (!state.keyPalette.dm.states) {
       state.keyPalette.dm.states = createDefaultInteractionDeltas(true);
     } else {
-      state.keyPalette.dm.states = resolveInteractionDeltas(state.keyPalette.dm.states, true);
+      const dm = state.keyPalette.dm.states;
+      Object.assign(dm, resolveInteractionDeltas(dm, true));
+      for (const key of Object.keys(dm)) {
+        if (key !== 'deltaMin' && key !== 'deltaMax' && key !== 'state2Scale') {
+          delete dm[key];
+        }
+      }
     }
     return;
   }
