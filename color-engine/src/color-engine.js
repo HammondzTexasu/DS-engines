@@ -2252,7 +2252,7 @@ function appendPaletteColorTokens(result, steps, endStep, prefix, lines, format,
 }
 
 /**
- * Ghost poles: `--*-0-state1` → `var(--*-{first})`, `--*-0-state2` → `var(--*-{second})`.
+ * Step 0 aliases: `--*-0-state1` → `var(--*-{first})`, `--*-0-state2` → `var(--*-{second})`.
  * Grid jump (not interaction Δ). Build + runtime.
  * @param {number[]} steps
  * @param {string} prefix
@@ -2317,7 +2317,7 @@ function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bg
  * Build `:root { … }` CSS custom properties — **colors only** (min / steps / max + interaction states).
  * Interpolators, start/end tones live in config JSON, not in CSS tokens.
  * Does not regenerate colors — pass results from `generateSystem` / `generateCustomPaletteForMode`.
- * Custom: `includeSteps` filter; partial whitelist omits min/max + ghost `0-state*`.
+ * Custom: `includeSteps` filter; partial whitelist omits min/max + `0-state*`.
  * Full palettes: `--*-0-state1|2` = `var(--*-10|20)` (grid jump; build + runtime).
  * Runtime: universal `--state-{step}-state1|2` / `--state-dm-…` (Δ from HCT T, applied as OKLCH L; key-step anchored).
  * @param {EngineState} state
@@ -2335,7 +2335,35 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   const lmPivotTone = resolvePivotTone(lmStates, keyResults.lm, steps);
   const dmPivotTone = resolvePivotTone(dmStates, keyResults.dm, steps);
 
+  const buildStatesComment = [
+    '',
+    '  /* Build interaction states — precomputed hex from HCT Δ vs bg',
+    '   * (|Δ| scales deltaMin→deltaMax by distance to bg; HCT or OKLCH apply per config).',
+    '   * state1 ≈ hover, state2 ≈ pressed (e.g. state2Scale).',
+    '   * Usage: background: var(--palette-1-50-state1);',
+    '   * Tokens: --{palette}-{step}-state1|2 (steps 10…end; LM & DM palette prefixes, e.g. --palette-1-dm-50-state1).',
+    '   * Step 0 (full palettes only): --*-0-state1|2 → var(--*-10|20) — hex aliases, not computed states',
+    '   *   (e.g. ghost / transparent controls: rest 0, hover 0-state1, pressed 0-state2).',
+    '   */',
+  ];
+
+  const runtimeStatesComment = [
+    '',
+    '  /* Runtime interaction states — signed Δ from HCT T vs bg',
+    '   * (|Δ| scales deltaMin→deltaMax by distance to bg),',
+    '   * applied as OKLCH L (0–100), e.g. --state-10-state1: -5.6;',
+    '   * state1 ≈ hover, state2 ≈ pressed (e.g. state2Scale).',
+    '   * CSS relative `l` is 0–1, so divide the token by 100. Wrap in rgb() to clip into sRGB',
+    '   * (same look on sRGB and P3 under color management):',
+    '   *   background: rgb(from oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h) r g b);',
+    '   * Δ tokens: LM --state-{step}-state1|2 · DM --state-dm-{step}-state1|2',
+    '   * Step 0 (full palettes only): --*-0-state1|2 → var(--*-10|20) — hex aliases, not Δ',
+    '   *   (e.g. ghost / transparent controls: rest 0, hover 0-state1, pressed 0-state2).',
+    '   */',
+  ];
+
   appendPaletteColorTokens(keyResults.lm, steps, endStep, KEY_PALETTE_NAME, lines, 'tone');
+  if (!runtime) lines.push(...buildStatesComment);
   appendGhostZeroStateTokens(steps, KEY_PALETTE_NAME, lines);
   if (!runtime) {
     appendBuildInteractionStateTokens(
@@ -2374,17 +2402,7 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   }
 
   if (runtime) {
-    lines.push(
-      '',
-      '  /* Runtime interaction states — signed Δ from HCT T math, applied as OKLCH L (0–100).',
-      '   * CSS relative `l` is 0–1, so divide the token by 100. Wrap in rgb() to clip into sRGB',
-      '   * (same look on sRGB and P3 under color management):',
-      '   *   background: rgb(from oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h) r g b);',
-      '   * Ghost poles (full palettes only): --*-0-state1|2 → var(--*-10|20) (not Δ).',
-      '   * LM: --state-{step}-state1|state2',
-      '   * DM: --state-dm-{step}-state1|state2',
-      '   */',
-    );
+    lines.push(...runtimeStatesComment);
     appendRuntimeStateDeltaTokens(keyResults.lm, steps, 'lm', lines, lmStates, keyResults.lm.min, lmPivotTone);
     appendRuntimeStateDeltaTokens(keyResults.dm, steps, 'dm', lines, dmStates, keyResults.dm.min, dmPivotTone);
   }
