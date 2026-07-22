@@ -2377,8 +2377,9 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
     lines.push(
       '',
       '  /* Runtime interaction states — signed Δ from HCT T math, applied as OKLCH L (0–100).',
-      '   * CSS relative `l` is 0–1, so divide the token by 100:',
-      '   *   background: oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h);',
+      '   * CSS relative `l` is 0–1, so divide the token by 100. Wrap in rgb() to clip into sRGB',
+      '   * (same look on sRGB and P3 under color management):',
+      '   *   background: rgb(from oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h) r g b);',
       '   * Ghost poles (full palettes only): --*-0-state1|2 → var(--*-10|20) (not Δ).',
       '   * LM: --state-{step}-state1|state2',
       '   * DM: --state-dm-{step}-state1|state2',

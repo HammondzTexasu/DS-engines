@@ -125,7 +125,8 @@ Stavy na **krocích palety** (ne `min`/`max` — až na ghost níže).
 | **`runtime`** | vždy OKLCH | vypnuto | univerzální `--state-{step}-state1` / `state2` + `--state-dm-…` (Δ z T); full: `--*-0-state1|2` → `var(--*-10|20)` |
 
 * Build + OKLCH: `oklchGamut` vždy (i bez relative — clamp C). GUI: runtime zamkne Space na OKLCH + Relative off (preference v configu zůstanou).
-* Runtime použití (také komentář v `tokensCss`): `oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h)` — token je 0–100, CSS `l` je 0–1.
-* Playground runtime hover/pressed používá stejný CSS zápis (tokeny injektované do DOM); build zůstává u JS hex.
+* Runtime použití (také komentář v `tokensCss`) — Δ na L, výsledek oříznout do sRGB přes `rgb(from …)`:
+  `rgb(from oklch(from var(--palette-1-50) calc(l + var(--state-50-state1) / 100) c h) r g b)` — token je 0–100, CSS `l` je 0–1.
+* Playground runtime hover/pressed používá stejný CSS zápis; build zůstává u JS hex.
 * Playground: hover/pressed → `T:` (HCT) nebo `L: L_rest + Δ` (OKLCH / runtime; ne L z hex roundtripu).
 * API: `resolveModeInteractionStates`, `resolvePivotTone`, `colorAtInteractionState(color, bgHex, states, level, pivotTone)`.

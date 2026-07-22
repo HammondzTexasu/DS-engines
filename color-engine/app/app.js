@@ -436,7 +436,7 @@ function patchTokensOutput(tokensCss) {
   patchEngineTokensStyle(css);
 }
 
-/** Live `:root` tokens for runtime swatch POC (`oklch(from … var(--state-…))`). */
+/** Live `:root` tokens for runtime swatch POC (`rgb(from oklch(from …) …)` → sRGB). */
 let engineTokensStyleEl = /** @type {HTMLStyleElement | null} */ (null);
 
 /** @param {string} tokensCss */
@@ -1084,11 +1084,11 @@ function setSwatchFaceColor(el, hex) {
 }
 
 /**
- * Runtime: `--swatch-bg` = oklch(from … ΔL/100) so contrast-color tracks the visible fill.
+ * Runtime: `--swatch-bg` = rgb(from oklch(from … ΔL/100) …) so fill is sRGB-clipped (same recipe as tokens comment).
  * @param {HTMLElement} el
  * @param {string} restHex
  * @param {string} stateVar
- * @returns {number} resulting L 0–100 (for label)
+ * @returns {number} resulting L 0–100 before sRGB clip (for label: L_rest + Δ)
  */
 function setSwatchFaceRuntimeCss(el, restHex, stateVar) {
   el.style.setProperty('--swatch-rest', restHex);
@@ -1097,7 +1097,7 @@ function setSwatchFaceRuntimeCss(el, restHex, stateVar) {
   const L = hexToOklch(restHex).l + (Number.isFinite(dl) ? dl : 0);
   setSwatchFace(
     el,
-    `oklch(from var(--swatch-rest) calc(l + var(${stateVar}) / 100) c h)`,
+    `rgb(from oklch(from var(--swatch-rest) calc(l + var(${stateVar}) / 100) c h) r g b)`,
     L,
   );
   return L;
@@ -2933,7 +2933,7 @@ function patchGhostZeroPreview(colorEl, restHex, hoverHex, pressedHex) {
 
 /**
  * Live state1 (hover) / state2 (pressed) preview on palette steps.
- * Runtime delivery uses CSS `oklch(from … var(--state-…))` (same as tokens comment).
+ * Runtime delivery uses CSS `rgb(from oklch(from …) r g b)` (sRGB clip; same as tokens comment).
  * @param {HTMLElement} colorEl
  * @param {{
  *   restHex: string,
