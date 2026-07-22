@@ -119,10 +119,10 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
 * **`keyPalette.lm.states`** — plná strategie + LM delty:
-  * `{ "deltaMin", "deltaMax", "state2Scale", "relativeChroma", "delivery", "space", "oklchGamut", "pivotStep" }`
+  * `{ "deltaMin", "deltaMax", "state2Scale", "relativeChroma", "delivery", "space", "oklchGamut", "pivotTone" }`
   * `delivery`: `"build"` \| `"runtime"`; `space`: `"hct"` \| `"oklch"`; `oklchGamut`: `"srgb"` \| `"p3"`
-  * `relativeChroma` default `true`; `pivotStep` default prefer `60`
-  * `pivotStep` — id kroku mřížky; prah = HCT T toho key kroku (při změně `stepCount` se remappuje)
+  * `relativeChroma` default `true`; `pivotTone` default `40` (HCT T)
+  * `pivotTone` — absolutní HCT T práh: `T <= pivotTone` → zesvětlit, jinak ztmavit
 * **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; staré shared klíče se při importu ignorují)
 * Matika states vždy z HCT T; OKLCH/runtime jen aplikace Δ na L. `bg` **není** v configu — `bgHex` do API.
 * `colorAtInteractionState(color, bgHex, states, level, pivotTone)`
@@ -143,13 +143,13 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`, `includeSteps: null`) |
 | `moveCustomPalette(state, id, ±1)` | Pořadí custom palet v poli (config) |
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
-| `createDefaultInteractionStates(stepCount?)` | LM default: deltas + `delivery: build`, `space: hct`, `relativeChroma: true`, `oklchGamut: srgb`, `pivotStep` (prefer 60) |
+| `createDefaultInteractionStates(stepCount?)` | LM default: deltas + `delivery: build`, `space: hct`, `relativeChroma: true`, `oklchGamut: srgb`, `pivotTone: 40` |
 | `createDefaultInteractionDeltas(forDm?)` | Jen `deltaMin` / `deltaMax` / `state2Scale` (DM default při `true`) |
-| `normalizeStoredInteractionStates(states, steps?)` | LM config/GUI shape — **bez** runtime override space/relative; snap `pivotStep` |
+| `normalizeStoredInteractionStates(states, steps?)` | LM config/GUI shape — **bez** runtime override space/relative; clamp `pivotTone` |
 | `resolveInteractionStates(states, steps?)` | Efektivní LM (runtime → OKLCH + relative off; nemění uložené preference) |
 | `resolveInteractionDeltas(deltas, forDm?)` | Normalizace DM/LM deltas |
 | `resolveModeInteractionStates(keyPalette, mode, steps?)` | Efektivní stavy: LM strategy + mode deltas |
-| `resolvePivotStep` / `remapPivotStep` / `resolvePivotTone` / `defaultPivotStep` | Pivot prah z kroku mřížky |
+| `resolvePivotTone(pivotTone)` / `DEFAULT_PIVOT_TONE` | Clamp HCT T prahu 0–100 |
 | `importEngineConfig(json)` | JSON → state (orphan `brand.palette` → `brand: null`) |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma / override body); volá `syncColorOverridePoints` + `applyColorOverrides` |
@@ -160,19 +160,19 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | `applyBrandColor(state, hex, opts?)` | Seed → H/C; `perfectFit` = ohyb + override; `overrideNearest` = jen override (mutex) |
 | `clearBrandConfig(state)` | Smaže `state.brand` (křivka i sticky override zůstávají — GUI toggle undo řeší baseline zvlášť) |
 | `applyBrandStepOverride(...)` | Alias → `applyColorOverrides` |
-| `normalizeStateForStepCount(state, previousStepCount?)` | Po změně `stepCount`: interpolate body + `syncIncludeStepsFromTones` + remap `pivotStep`. GUI: při Perfect fit pak znovu `applyBrandColor` |
+| `normalizeStateForStepCount(state, previousStepCount?)` | Po změně `stepCount`: interpolate body + `syncIncludeStepsFromTones` (`pivotTone` beze změny). GUI: při Perfect fit pak znovu `applyBrandColor` |
 | `colorAtInteractionState(color, bgHex, states, level, pivotTone)` | state1/state2 barva; matika T; `bgHex` = povrch za barvou |
 | `interactionStateDelta(...)` | Podepsané Δ z HCT T na 1 desetinu (runtime tokeny + OKLCH) |
 | `roundStateDelta(n)` | Zaokrouhlení Δ na 1 desetinu |
 
-Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`.
+Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`, `DEFAULT_PIVOT_TONE`.
 ### 5.2 Low-level (playground / tooling)
 
 Headless pipeline je typicky nepotřebuje; `app/` je používá.
 
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
 * **Interaction states:** `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`, `resolvePivotTone`, `applyInteractionTone`, `interactionStateDelta`, `roundStateDelta`  
-  * Matika vždy HCT T (směr + \|Δ\|); Δ na 1 desetinu; OKLCH/runtime jen aplikace. Uložené preference (space/relative/gamut) přežijí runtime.
+  * Matika vždy HCT T (`T <= pivotTone` → zesvětlit); Δ na 1 desetinu; OKLCH/runtime jen aplikace. Uložené preference (space/relative/gamut) přežijí runtime.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → shortest-arc přes `hueInterpDelta`), `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
@@ -220,7 +220,7 @@ Volat **po** nastavení `state.stepCount` (před `generateSystem` / render).
 | Střední | Relativní pozice `t` na staré škále → nejbližší **volný** prostřední slot |
 | Zahazování | Jen když `počet středních > počet prostředních slotů` (nechá se zleva podle `t`) |
 
-Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. `includeSteps` při `stepCount`: s override = offsety od override stepu, bez = `_includeTones`. Key křivka hýbe whitelistem jen s LM `colorOverride` (offsety). Volitelný argument `previousStepCount` proporčně přemapuje LM `pivotStep` na novou mřížku.
+Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. `includeSteps` při `stepCount`: s override = offsety od override stepu, bez = `_includeTones`. Key křivka hýbe whitelistem jen s LM `colorOverride` (offsety). `pivotTone` se při `stepCount` nemění.
 
 ---
 

@@ -55,7 +55,6 @@ import {
   resolveColorOverrideStep,
   resolveParam,
   resolvePivotTone,
-  resolvePivotStep,
 } from '../src/color-engine.js';
 import { hexToOklch } from '../lib/oklch-relative-chroma.mjs';
 
@@ -1125,7 +1124,7 @@ function applyInteractionSwatchLevel(colorEl, level) {
   const valueEl = colorEl.querySelector('.swatch-value');
   const states = ctx.getStates();
   const cfg = resolveInteractionStates(states, getSteps(state.stepCount));
-  const pivotTone = typeof ctx.getPivotTone === 'function' ? ctx.getPivotTone() : 60;
+  const pivotTone = typeof ctx.getPivotTone === 'function' ? ctx.getPivotTone() : 40;
 
   if (cfg.delivery === 'runtime' && Number.isFinite(ctx.step)) {
     const stateVar = runtimeStateVarName(ctx.mode, ctx.step, level);
@@ -1294,9 +1293,8 @@ function createInteractionHandlers(mode) {
     },
     getPivotTone: () => {
       const steps = getSteps(state.stepCount);
-      const key = generateKeyPalettes(state.keyPalette, steps)[mode];
       const states = resolveModeInteractionStates(state.keyPalette, mode, steps);
-      return resolvePivotTone(states, key, steps);
+      return resolvePivotTone(states.pivotTone);
     },
   };
 }
@@ -1810,14 +1808,13 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
       scheduleRefreshPreviews();
     }));
 
-    const gridSteps = getSteps(state.stepCount);
-    lmStates.pivotStep = resolvePivotStep(lmStates.pivotStep, gridSteps);
-    modeRow.appendChild(createSimpleSelect(
-      'Pivot step (T threshold)',
-      String(lmStates.pivotStep),
-      gridSteps.map((step) => ({ value: String(step), label: String(step) })),
+    modeRow.appendChild(createSliderControl(
+      'Pivot tone (lighten if T ≤)',
+      resolvePivotTone(lmStates.pivotTone),
+      0,
+      100,
       (v) => {
-        lmStates.pivotStep = resolvePivotStep(Number(v), getSteps(state.stepCount));
+        lmStates.pivotTone = resolvePivotTone(v);
         scheduleRefreshPreviews();
       },
     ));

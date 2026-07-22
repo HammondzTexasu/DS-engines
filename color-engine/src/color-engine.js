@@ -26,18 +26,18 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
 /**
  * Interaction states for palette steps (not min/max).
  * LM holds full config; DM stores only deltas (`InteractionStatesDeltas`) and inherits
- * delivery / space / relativeChroma / oklchGamut / pivotStep from LM via `resolveModeInteractionStates`.
+ * delivery / space / relativeChroma / oklchGamut / pivotTone from LM via `resolveModeInteractionStates`.
  * `delivery: 'build'` — emit hex `--*-state1` / `--*-state2` (space HCT or OKLCH).
  * `delivery: 'runtime'` — force OKLCH, relative chroma off; emit only `--state-*-state1` / `--state-*-state2` (Δ from HCT T math, applied as OKLCH L).
  * `oklchGamut` — used when build + OKLCH (sRGB / Display P3 max-C).
- * `pivotStep` — key grid step whose HCT T is the lighten/darken threshold (LM only; remapped with stepCount).
+ * `pivotTone` — HCT T threshold (LM only): `T <= pivotTone` → lighten, else darken.
  * @typedef {{ deltaMin: number, deltaMax: number, state2Scale: number }} InteractionStatesDeltas
  * @typedef {InteractionStatesDeltas & {
  *   relativeChroma: boolean,
  *   delivery: 'build' | 'runtime',
  *   space: 'hct' | 'oklch',
  *   oklchGamut: 'srgb' | 'p3',
- *   pivotStep: number,
+ *   pivotTone: number,
  * }} InteractionStatesConfig
  */
 /** @typedef {{ min: string, max: string, start: { tone: number }, end: { tone: number }, interpolator: Bezier, states: InteractionStatesConfig | InteractionStatesDeltas, interpolatorOverride?: boolean }} KeyPaletteConfig */
@@ -1030,91 +1030,35 @@ export function createDefaultInteractionDeltas(forDm = false) {
   };
 }
 
-/**
- * Default pivot step id for a grid (prefer 60 → 5 darken / 5 lighten on 10-step grid).
- * @param {number} stepCount
- * @returns {number}
- */
-export function defaultPivotStep(stepCount) {
-  const steps = getSteps(Math.max(1, Math.round(stepCount) || 1));
-  if (!steps.length) return 10;
-  return resolvePivotStep(60, steps);
-}
+/** Default HCT T pivot: `T <= pivotTone` → lighten, else darken. */
+export const DEFAULT_PIVOT_TONE = 40;
 
 /**
- * Snap / pick a valid pivot step on the grid.
- * @param {unknown} pivotStep
- * @param {number[]} steps
+ * Clamp pivot tone to 0–100 (integer).
+ * @param {unknown} pivotTone
  * @returns {number}
  */
-export function resolvePivotStep(pivotStep, steps) {
-  if (!steps.length) return 10;
-  if (typeof pivotStep === 'number' && Number.isFinite(pivotStep) && steps.includes(pivotStep)) {
-    return pivotStep;
+export function resolvePivotTone(pivotTone) {
+  if (typeof pivotTone === 'number' && Number.isFinite(pivotTone)) {
+    return Math.min(100, Math.max(0, Math.round(pivotTone)));
   }
-  const target = typeof pivotStep === 'number' && Number.isFinite(pivotStep) ? pivotStep : 60;
-  let best = steps[0];
-  let bestDist = Math.abs(steps[0] - target);
-  for (const step of steps) {
-    const dist = Math.abs(step - target);
-    if (dist < bestDist) {
-      best = step;
-      bestDist = dist;
-    }
-  }
-  return best;
-}
-
-/**
- * Remap pivot step when the key grid changes (proportional by index / span).
- * @param {number} pivotStep
- * @param {number[]} fromSteps
- * @param {number[]} toSteps
- * @returns {number}
- */
-export function remapPivotStep(pivotStep, fromSteps, toSteps) {
-  if (!toSteps.length) return pivotStep;
-  if (!fromSteps.length) return resolvePivotStep(pivotStep, toSteps);
-
-  const fromIdx = fromSteps.indexOf(pivotStep);
-  let t;
-  if (fromIdx >= 0) {
-    t = fromIdx / Math.max(1, fromSteps.length - 1);
-  } else {
-    const a = fromSteps[0];
-    const b = fromSteps[fromSteps.length - 1];
-    t = b > a ? (Number(pivotStep) - a) / (b - a) : 0.5;
-  }
-  const clamped = Math.min(1, Math.max(0, t));
-  return toSteps[Math.round(clamped * (toSteps.length - 1))];
-}
-
-/**
- * HCT T at the configured pivot step (from that mode's key palette).
- * @param {Partial<InteractionStatesConfig> | null | undefined} states
- * @param {ReturnType<typeof generateKeyPalette>} keyResult
- * @param {number[]} steps
- * @returns {number}
- */
-export function resolvePivotTone(states, keyResult, steps) {
-  const step = resolvePivotStep(states?.pivotStep, steps);
-  const tone = keyResult.steps[step]?.tone;
-  return typeof tone === 'number' && Number.isFinite(tone) ? tone : 50;
+  return DEFAULT_PIVOT_TONE;
 }
 
 /**
  * Full LM defaults (strategy + deltas).
- * @param {number} [stepCount=10]
+ * @param {number} [stepCount=10] — unused (API compat); pivot is absolute T
  * @returns {InteractionStatesConfig}
  */
 export function createDefaultInteractionStates(stepCount = 10) {
+  void stepCount;
   return {
     ...createDefaultInteractionDeltas(false),
     relativeChroma: true,
     delivery: 'build',
     space: 'hct',
     oklchGamut: 'srgb',
-    pivotStep: defaultPivotStep(stepCount),
+    pivotTone: DEFAULT_PIVOT_TONE,
   };
 }
 
@@ -1146,19 +1090,19 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
  * Stored LM states (config / GUI). Does **not** force runtime overrides —
  * preferences for space / relative / gamut survive delivery toggles.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
- * @param {number[]} [steps] — when provided, snaps `pivotStep` onto the grid
+ * @param {number[]} [steps] — unused (API compat)
  * @returns {InteractionStatesConfig}
  */
 export function normalizeStoredInteractionStates(states, steps) {
+  void steps;
   const deltas = resolveInteractionDeltas(states, false);
-  const grid = steps?.length ? steps : getSteps(10);
   return {
     ...deltas,
     delivery: states?.delivery === 'runtime' ? 'runtime' : 'build',
     space: states?.space === 'oklch' ? 'oklch' : 'hct',
     relativeChroma: typeof states?.relativeChroma === 'boolean' ? states.relativeChroma : true,
     oklchGamut: states?.oklchGamut === 'p3' ? 'p3' : 'srgb',
-    pivotStep: resolvePivotStep(states?.pivotStep, grid),
+    pivotTone: resolvePivotTone(states?.pivotTone),
   };
 }
 
@@ -1226,7 +1170,7 @@ export function roundStateDelta(n) {
 
 /**
  * Next HCT T after interaction (state1 = 1×, state2 = × `state2Scale`).
- * Direction from `pivotTone`; |Δ| rounded to 1 decimal before apply.
+ * `T <= pivotTone` → lighten; else darken. |Δ| rounded to 1 decimal before apply.
  * @param {number} colorTone
  * @param {number} bgTone
  * @param {InteractionStatesConfig | InteractionStatesDeltas} states
@@ -1238,7 +1182,7 @@ export function applyInteractionTone(colorTone, bgTone, states, level, pivotTone
   const delta = interactionDeltaMagnitude(colorTone, bgTone, states);
   const scale = level === 2 ? Number(states.state2Scale) : 1;
   const amount = roundStateDelta(delta * scale);
-  const next = colorTone > pivotTone ? colorTone - amount : colorTone + amount;
+  const next = colorTone <= pivotTone ? colorTone + amount : colorTone - amount;
   return Math.min(100, Math.max(0, next));
 }
 
@@ -1295,7 +1239,7 @@ function colorAtInteractionStateOklch(color, bgHex, states, level, pivotTone) {
  * @param {string} bgHex — surface behind the color (often key min)
  * @param {InteractionStatesConfig} states
  * @param {1 | 2} level
- * @param {number} pivotTone — HCT T at configured pivot step
+ * @param {number} pivotTone — HCT T threshold (`T <= pivot` → lighten)
  * @returns {{ hue: number, chroma: number, tone: number, hex: string }}
  */
 export function colorAtInteractionState(color, bgHex, states, level, pivotTone) {
@@ -1623,26 +1567,13 @@ function remapInterpolatePointsForSteps(points, steps) {
 }
 
 /**
- * Keep interpolate H/C points + LM pivotStep aligned with the current step grid (mutates state).
+ * Keep interpolate H/C points aligned with the current step grid (mutates state).
  * @param {EngineState} state
- * @param {number} [previousStepCount] — when set, remaps `pivotStep` (index); includeSteps follow `_includeTones`
+ * @param {number} [previousStepCount] — unused for pivot (absolute T); kept for API / includeSteps callers
  */
 export function normalizeStateForStepCount(state, previousStepCount) {
+  void previousStepCount;
   const steps = getSteps(state.stepCount);
-  const stepCountChanged = (
-    typeof previousStepCount === 'number'
-    && Number.isFinite(previousStepCount)
-    && previousStepCount !== state.stepCount
-  );
-
-  if (stepCountChanged && state.keyPalette?.lm?.states) {
-    const lmStates = /** @type {InteractionStatesConfig} */ (state.keyPalette.lm.states);
-    lmStates.pivotStep = remapPivotStep(
-      lmStates.pivotStep,
-      getSteps(previousStepCount),
-      steps,
-    );
-  }
 
   if (state.keyPalette?.lm?.states) {
     Object.assign(
@@ -2332,8 +2263,8 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
   const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm', steps);
   const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm', steps);
   const runtime = lmStates.delivery === 'runtime';
-  const lmPivotTone = resolvePivotTone(lmStates, keyResults.lm, steps);
-  const dmPivotTone = resolvePivotTone(dmStates, keyResults.dm, steps);
+  const lmPivotTone = resolvePivotTone(lmStates.pivotTone);
+  const dmPivotTone = resolvePivotTone(dmStates.pivotTone);
 
   const buildStatesComment = [
     '',
