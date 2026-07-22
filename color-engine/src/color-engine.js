@@ -1081,7 +1081,7 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
     : base.state2Scale;
   return {
     deltaMin,
-    deltaMax: Math.max(deltaMin, deltaMax),
+    deltaMax,
     state2Scale,
   };
 }
@@ -1146,6 +1146,7 @@ export function resolveModeInteractionStates(keyPalette, mode, steps) {
 /**
  * |ΔT| from proximity of swatch HCT T to bg HCT T.
  * Closer to bg → nearer `deltaMin`; farther → nearer `deltaMax`.
+ * `deltaMax < deltaMin` is allowed (inverted continuum).
  * @param {number} colorTone
  * @param {number} bgTone
  * @param {InteractionStatesConfig | InteractionStatesDeltas} states

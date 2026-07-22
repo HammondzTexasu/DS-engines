@@ -110,7 +110,7 @@ Stavy na **krocích palety** (ne `min`/`max` — až na ghost níže).
 
 * **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`, `pivotTone`
 * **Per mode deltas:** `deltaMin` / `deltaMax` / `state2Scale` — LM i DM (DM config má jen tyto tři)
-* **Matika vždy HCT T:** `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15)
+* **Matika vždy HCT T:** `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15). `deltaMax < deltaMin` je povolené (invertovaný průběh).
 * **`pivotTone`:** absolutní HCT T práh (default 40). `T <= pivotTone` → zesvětlit, jinak ztmavit. DM dědí z LM.
 * **`bg`** = povrch za barvou (playground: key `min`) — do matiky jde jeho HCT T
 * **state1** = 1×; **state2** = × `state2Scale` — výsledné |Δ| / signed Δ se bere na **1 desetinu** (build i runtime tokeny)

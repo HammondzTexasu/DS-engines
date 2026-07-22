@@ -1867,13 +1867,11 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
 
   row.appendChild(createSliderControl('Delta min (near bg)', states.deltaMin, 0, 40, (v) => {
     states.deltaMin = v;
-    if (states.deltaMax < states.deltaMin) states.deltaMax = states.deltaMin;
     scheduleRefreshPreviews();
   }));
 
   row.appendChild(createSliderControl('Delta max (far from bg)', states.deltaMax, 0, 40, (v) => {
     states.deltaMax = v;
-    if (states.deltaMin > states.deltaMax) states.deltaMin = states.deltaMax;
     scheduleRefreshPreviews();
   }));
 
@@ -3612,8 +3610,7 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     attachRangePointerCapture(range);
   }
 
-  const commit = (raw) => {
-    const v = applyValue(raw);
+  const paint = (v) => {
     numberInput.value = String(v);
     range.value = String(v);
     syncSliderVisuals(wrap, range);
@@ -3623,6 +3620,11 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
         positionChromaMaxMarker(marker, range, getMarkerMax());
       }
     }
+  };
+
+  const commit = (raw) => {
+    const v = applyValue(raw);
+    paint(v);
     onChange(v);
   };
 
@@ -3642,6 +3644,11 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     options.markerKey ?? null,
     getMarkerMax ?? null,
   );
+
+  /** Update UI from outside without firing onChange (e.g. paired min/max clamp). */
+  group.setValue = (raw) => {
+    paint(applyValue(raw));
+  };
 
   return group;
 }
