@@ -59,13 +59,14 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
 
 **Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
 
-**Published steps (`includeSteps`):** whitelist kroků mřížky, které jdou do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce.
-* `null` / vynecháno / celá mřížka → publikuje se vše včetně `0` / `max` (`10-20-…-end`) + ghost `--*-0-state1|2`
+**Published steps (`includeSteps` / `includeStepsDm`):** whitelist kroků mřížky do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce.
+* LM `includeSteps`: `null` / vynecháno / celá mřížka → publikuje se vše včetně `0` / `max` + ghost `--*-0-state1|2`
+* DM `includeStepsDm`: `null` / vynecháno → **stejné jako LM** (včetně LM sync). Po editaci = dirty; `[]` runtime / export plný seznam = dirty full (vždy aktuální mřížka); clear → znovu inherit. Partial = tones/offsets kolem **DM** override.
 * např. `[40]` nebo `[20, 40, 60]` → jen tyto kroky (**bez** `0` / `max` / ghost `0-state*`)
-* Intent: bez override = `_includeTones` (T-remap při `stepCount`); s LM `colorOverride` = `_includeOffsets` od override stepu (hex T) — key změna i `stepCount`. Do JSON jdou jen step id.
-* **1 published krok:** Fixed vs Interpolate nemá smysl — chroma se chová jako interpolate bod (relative % gamutu). Při 2+ krocích zůstává Fixed/Interpolate jako dřív.
+* Intent: bez override = `_includeTones` / `_includeTonesDm` (T-remap při `stepCount`); s `colorOverride` / `colorOverrideDm` = `_includeOffsets` / `_includeOffsetsDm` od override stepu (hex T). Do JSON jdou jen step id.
+* **1 published krok (per mode):** Fixed vs Interpolate nemá smysl — engine collapsuje H/C na **Fixed** (nevratně; křivku neobnoví) a chromu drží jako relative % gamutu (`ratio`). Stejné při `stepCount === 1` (celá mřížka = jeden krok).
 
-**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků. `includeSteps` se drží přes `_includeTones` (viz výše).
+**Změna počtu kroků palety:** krajní body interpolace drží své hodnoty (konec se jen přesune na nový poslední krok). Střední body drží **relativní pozici** na škále; zahodí se jen když jich je víc, než je volných prostředních kroků. Whitelist se drží přes tones/offsets (viz výše).
 
 **Názvy custom palet:** jen `a–z`, `0–9`, `-` (stejný tvar v configu i v názvech CSS tokenů).
 
@@ -87,7 +88,7 @@ Založení škály z konkrétní barvy (headless i GUI). Seed se ukládá do con
 * **`overrideNearest: true`:** nastaví na paletě **`colorOverride`** (přesný hex na nearest-T kroku), **bez** ohybu křivky. Mutex s Perfect fit.
 * **`perfectFit: true`:** ohne LM `key-tone-interpolator` + nastaví **`colorOverride`**. Mutex s Override nearest (při obou v JSON vyhraje Perfect fit).
 * API: `applyBrandColor(state, hex, { perfectFit, overrideNearest, paletteId? })`, `clearBrandConfig(state)`, `setColorOverride` / `applyColorOverrides`.
-* **Import** obnoví `state.brand` (GUI link / dokumentace seedu) — **ne** znovu ohýbá křivku. Starý config s `perfectFit` / `overrideNearest` bez `colorOverride` → override se doplní. Orphan `brand.palette` → `brand` se zahodí.
+* **Import** obnoví `state.brand` (GUI link / dokumentace seedu) — **ne** znovu ohýbá křivku. Orphan `brand.palette` → `brand` se zahodí.
 * **GUI:** Brand hex + PF/OV zůstávají, dokud platí palette Override color / zapnuté PF·OV (edit H/C je neshazuje). Reset brand: vypnutí Override u palety, smazání brand hexu, nebo drift H/C u **seed-only** brandu (bez PF/OV a bez `colorOverride`). Ruční edit key křivky odlinkuje brand (křivku nechá).
 ## 4c. Override color (per palette)
 
@@ -111,6 +112,7 @@ Stavy na **krocích palety** (ne `min`/`max` — až na ghost níže).
 * **Sdílená strategie** (jen `keyPalette.lm.states`): `delivery`, `space`, `relativeChroma`, `oklchGamut`, `pivotTone`
 * **Per mode deltas:** `deltaMin` / `deltaMax` / `state2Scale` — LM i DM (DM config má jen tyto tři)
 * **Matika vždy HCT T:** `|ΔT| = deltaMin + (|T − T_bg| / 100) × (deltaMax − deltaMin)` (LM default 5/20; DM 8/15). `deltaMax < deltaMin` je povolené (invertovaný průběh).
+* **Stropy:** `deltaMin` / `deltaMax` ∈ 0…40 (`STATE_DELTA_LIMIT`); `state2Scale` ∈ 1…4. Engine i GUI stejné; mimo rozsah se clampne.
 * **`pivotTone`:** absolutní HCT T práh (default 40). `T <= pivotTone` → zesvětlit, jinak ztmavit. DM dědí z LM.
 * **`bg`** = povrch za barvou (playground: key `min`) — do matiky jde jeho HCT T
 * **state1** = 1×; **state2** = × `state2Scale` — výsledné |Δ| / signed Δ se bere na **1 desetinu** (build i runtime tokeny)

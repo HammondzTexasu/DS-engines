@@ -83,7 +83,6 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 
 ```json
 {
-  "version": 1,
   "stepCount": 10,
   "keyPalette": {
     "lm": { "/* min, max, start, end, interpolator, states */": "…" },
@@ -93,6 +92,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
     {
       "name": "accent",
       "includeSteps": [40],
+      "includeStepsDm": [50, 60],
       "lm": { "hue": { /* ParamConfig */ }, "chroma": { /* ParamConfig */ } },
       "dm": { "hue": { /* … */ }, "chroma": { /* … */ } }
     }
@@ -105,9 +105,9 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 }
 ```
 
-* `version` — musí sedět s `ENGINE_CONFIG_VERSION` (aktuálně `1`), jinak `importEngineConfig` hodí chybu.
 * `customPalettes[].name` — sanitizuje se (`a–z`, `0–9`, `-`); runtime `id` se do JSON **neukládá**.
-* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše včetně `0`/`max` + ghost `0-state*`. Jinak unikátní seřazené step id (**bez** pólů). Bez override: `_includeTones` + T-remap při `stepCount`. S LM `colorOverride`: `_includeOffsets` od override stepu (hex T) při key změně i `stepCount`. Při 1 kroku engine collapsuje H/C na fixed a chromu drží relative (`ratio`).
+* `customPalettes[].includeSteps` — volitelné; `null` / vynecháno / celá key mřížka = publikovat vše včetně `0`/`max` + ghost `0-state*`. Jinak unikátní seřazené step id (**bez** pólů). Bez override: `_includeTones` + T-remap při `stepCount`. S LM `colorOverride`: `_includeOffsets` od override stepu (hex T) při key změně i `stepCount`. Při 1 published kroku **per mode** (LM / dirty DM / DM inherit) engine collapsuje H/C toho módu na fixed a chromu drží relative (`ratio`).
+* `customPalettes[].includeStepsDm` — volitelné; `null` / vynecháno = **inherit LM** (včetně LM sync). Po nastavení = dirty: runtime `[]` = dirty full (vždy aktuální mřížka; exportuje se jako úplný seznam), jinak partial kolem DM override / `_includeTonesDm`. Clear → inherit.
 * **`brand`** (volitelné) — `{ hex, perfectFit, overrideNearest, palette }`; `perfectFit` ⊥ `overrideNearest` (PF vyhraje). Orphan `palette` → drop brand.
 * **`customPalettes[].colorOverride`** (volitelné) — `{ hex }`; sticky LM hex lock; step = nearest key T (neukládá se).
 * **`customPalettes[].colorOverrideDm`** (volitelné) — totéž pro DM; nezávislé na LM.
@@ -123,13 +123,13 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `delivery`: `"build"` \| `"runtime"`; `space`: `"hct"` \| `"oklch"`; `oklchGamut`: `"srgb"` \| `"p3"`
   * `relativeChroma` default `true`; `pivotTone` default `40` (HCT T)
   * `pivotTone` — absolutní HCT T práh: `T <= pivotTone` → zesvětlit, jinak ztmavit
-* **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; staré shared klíče se při importu ignorují)
+* **`keyPalette.dm.states`** — jen delty `{ "deltaMin", "deltaMax", "state2Scale" }` (shared bere z LM; extra klíče se při importu ignorují)
 * Matika states vždy z HCT T; OKLCH/runtime jen aplikace Δ na L. `bg` **není** v configu — `bgHex` do API.
 * `colorAtInteractionState(color, bgHex, states, level, pivotTone)`
 
-**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s `clampInterpolatedChroma: true` → relative + clamp + flag v JSON; default (off) → absolutní C, flag vynechán; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `states` + volitelný `brand` s key palette / brand.
+**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s `clampInterpolatedChroma: true` → relative + clamp + flag v JSON; default (off) → absolutní C, flag vynechán; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `includeStepsDm` jen když je dirty; `states` + volitelný `brand` s key palette / brand.
 
-**Import** (`importEngineConfig`): validace → nové `id` palet → normalizace `includeSteps` → clamp/relative normalizace chroma; chybějící `states` → defaulty; orphan `brand.palette` → `brand: null`.
+**Import** (`importEngineConfig`): validace → nové `id` palet → normalizace `includeSteps` / `includeStepsDm` → clamp/relative normalizace chroma; chybějící `states` → defaulty; orphan `brand.palette` → `brand: null`.
 
 ---
 
@@ -140,32 +140,31 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 | API | Účel |
 | :--- | :--- |
 | `createDefaultState()` | Výchozí engine state |
-| `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`, `includeSteps: null`) |
+| `createCustomPalette(name?)` | Nová custom paleta (+ runtime `id`, `includeSteps` / `includeStepsDm: null`) |
 | `moveCustomPalette(state, id, ±1)` | Pořadí custom palet v poli (config) |
 | `createFixedParam(value)` / `createInterpolateParam(...)` | H/C parametry |
-| `createDefaultInteractionStates(stepCount?)` | LM default: deltas + `delivery: build`, `space: hct`, `relativeChroma: true`, `oklchGamut: srgb`, `pivotTone: 40` |
+| `createDefaultInteractionStates()` | LM default: deltas + `delivery: build`, `space: hct`, `relativeChroma: true`, `oklchGamut: srgb`, `pivotTone: 40` |
 | `createDefaultInteractionDeltas(forDm?)` | Jen `deltaMin` / `deltaMax` / `state2Scale` (DM default při `true`) |
-| `normalizeStoredInteractionStates(states, steps?)` | LM config/GUI shape — **bez** runtime override space/relative; clamp `pivotTone` |
-| `resolveInteractionStates(states, steps?)` | Efektivní LM (runtime → OKLCH + relative off; nemění uložené preference) |
-| `resolveInteractionDeltas(deltas, forDm?)` | Normalizace DM/LM deltas |
-| `resolveModeInteractionStates(keyPalette, mode, steps?)` | Efektivní stavy: LM strategy + mode deltas |
+| `normalizeStoredInteractionStates(states)` | LM config/GUI shape — **bez** runtime override space/relative; clamp `pivotTone` |
+| `resolveInteractionStates(states)` | Efektivní LM (runtime → OKLCH + relative off; nemění uložené preference) |
+| `resolveInteractionDeltas(deltas, forDm?)` | Normalizace DM/LM deltas (clamp: Δ 0…`STATE_DELTA_LIMIT`, scale `STATE2_SCALE_MIN`…`MAX`) |
+| `resolveModeInteractionStates(keyPalette, mode)` | Efektivní stavy: LM strategy + mode deltas |
 | `resolvePivotTone(pivotTone)` / `DEFAULT_PIVOT_TONE` | Clamp HCT T prahu 0–100 |
 | `importEngineConfig(json)` | JSON → state (orphan `brand.palette` → `brand: null`) |
 | `exportEngineConfig(state)` | state → JSON (kopie, state nemění kromě čtení) |
 | `generateSystem(state)` | Palety + `tokensCss` + `config` (**mutuje** relative chroma / override body); volá `syncColorOverridePoints` + `applyColorOverrides` |
-| `setColorOverride(palette, hex\|null, mode?)` | Sticky hex lock (`colorOverride` / `colorOverrideDm`); default mode `lm` |
+| `setColorOverride(palette, hex\|null, mode?, keyResult?, steps?)` | Sticky hex lock (`colorOverride` / `colorOverrideDm`); default mode `lm`. Clear → drop offsets + reseed tones from current whitelist (pass `keyResult` + `steps`) |
 | `resolveColorOverrideStep(palette, keyResult, steps, mode?)` | Aktuální locknutý step id pro mód |
 | `syncColorOverridePoints(state, key)` | Dosadí LM i DM interp body na override step (vyhraje slot) |
 | `applyColorOverrides(state, key, custom)` | Vynutí hex 1:1 na LM / DM kroku (**voláno z** `generateSystem`) |
 | `applyBrandColor(state, hex, opts?)` | Seed → H/C; `perfectFit` = ohyb + override; `overrideNearest` = jen override (mutex) |
 | `clearBrandConfig(state)` | Smaže `state.brand` (křivka i sticky override zůstávají — GUI toggle undo řeší baseline zvlášť) |
-| `applyBrandStepOverride(...)` | Alias → `applyColorOverrides` |
-| `normalizeStateForStepCount(state, previousStepCount?)` | Po změně `stepCount`: interpolate body + `syncIncludeStepsFromTones` (`pivotTone` beze změny). GUI: při Perfect fit pak znovu `applyBrandColor` |
+| `normalizeStateForStepCount(state)` | Po změně `stepCount`: interpolate body + `syncIncludeStepsFromTones` (`pivotTone` beze změny). GUI: při Perfect fit pak znovu `applyBrandColor` |
 | `colorAtInteractionState(color, bgHex, states, level, pivotTone)` | state1/state2 barva; matika T; `bgHex` = povrch za barvou |
 | `interactionStateDelta(...)` | Podepsané Δ z HCT T na 1 desetinu (runtime tokeny + OKLCH) |
 | `roundStateDelta(n)` | Zaokrouhlení Δ na 1 desetinu |
 
-Konstanty: `ENGINE_CONFIG_VERSION`, `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`, `DEFAULT_PIVOT_TONE`.
+Konstanty: `KEY_PALETTE_NAME`, `DEFAULT_BEZIER`, `LINEAR_BEZIER`, `CHROMA_MAX`, `DEFAULT_STATE_DELTA_MIN`, `DEFAULT_STATE_DELTA_MAX`, `DEFAULT_STATE_DELTA_MIN_DM`, `DEFAULT_STATE_DELTA_MAX_DM`, `DEFAULT_STATE2_SCALE`, `STATE_DELTA_LIMIT`, `STATE2_SCALE_MIN`, `STATE2_SCALE_MAX`, `DEFAULT_PIVOT_TONE`.
 ### 5.2 Low-level (playground / tooling)
 
 Headless pipeline je typicky nepotřebuje; `app/` je používá.
@@ -176,7 +175,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → shortest-arc přes `hueInterpDelta`), `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
-* **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `normalizeIncludeSteps`, `setIncludeStepsIntent`, `syncIncludeStepsFromTones`, `isFullIncludeSteps`, `isSingleIncludeStep`, `collapseParamsForSingleIncludeStep`
+* **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `resolvePublishedIncludeSteps`, `normalizeIncludeSteps`, `setIncludeStepsIntent`, `setIncludeStepsDmIntent`, `syncIncludeStepsFromTones`, `isFullIncludeSteps`, `isDirtyFullIncludeStepsDm`, `isFullPublishedIncludeSteps`, `isSinglePublishedIncludeStep`, `collapseParamsForSingleIncludeStep`
 * **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`
 * **Color override:** `setColorOverride`, `resolveColorOverrideStep`, `syncColorOverridePoints`, `applyColorOverrides`
 * **Generování po kouskách:** `generateKeyPalette`, `generateKeyPalettes`, `generateCustomPaletteForMode`
@@ -190,13 +189,13 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 Pořadí uvnitř:
 
 1. Spočítá key palety z aktuálního `stepCount`.
-2. **`syncIncludeStepsFromTones`** (`requireColorOverride`) — u palet s LM `colorOverride` drží whitelist jako offsety kolem override stepu (hex T). (Při `stepCount` bez flagu: s override = offsety, bez = `_includeTones`.)
-3. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při `includeSteps` s právě 1 krokem collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
+2. **`syncIncludeStepsFromTones`** — s `requireColorOverride: true` (v `generateSystem`): jen módy, které **mají** override (LM `colorOverride` / dirty DM + `colorOverrideDm`) → offsety kolem override stepu. Dirty DM bez DM ov se tu nepřemapuje. Bez flagu (`stepCount`): LM vždy + dirty DM; s override = offsety, bez = `_includeTones` / `_includeTonesDm`. DM `null` = inherit, nesyncuje se zvlášť.
+3. **`applyRelativeCustomChroma`** — u interpolate chroma s clamp on přepíše ve `state`: `ratio`, `value`, `gamutLimit`. Při `clampInterpolatedChroma: false` přeskočí. Při 1 published kroku **per mode** collapsuje H/C na fixed a chromu remapuje relative na tom kroku.
 4. **`clampAllCustomChroma`** — safety ořez interpolate `value` do HCT limitu (při clamp on).
 5. **`syncColorOverridePoints`** — u palet s `colorOverride` / `colorOverrideDm` drží LM / DM interp body na nearest-T kroku (value z hexu; override vyhraje slot).
 6. Spočítá custom palety (LM/DM) na **plné** mřížce (mezikroky: clamp on → `clampChroma`; clamp off → raw interpolované C).
 7. **`applyColorOverrides`** — vynutí přesný hex na LM / DM kroku.
-8. Složí `tokensCss` (custom kroky filtrované `includeSteps`) + vrátí i `config` z `exportEngineConfig` (včetně volitelného `brand` / `colorOverride` / `colorOverrideDm`).
+8. Složí `tokensCss` (custom kroky filtrované per-mode `includeSteps` / `includeStepsDm`) + vrátí i `config` z `exportEngineConfig` (včetně volitelného `brand` / `colorOverride` / `colorOverrideDm`).
 
 **Fixed chroma** (2+ published kroků) ve state se v tomto kroku **nemění** (může sedět nad peakem; při výpočtu barvy kroku se C stejně clampne).
 
@@ -220,7 +219,7 @@ Volat **po** nastavení `state.stepCount` (před `generateSystem` / render).
 | Střední | Relativní pozice `t` na staré škále → nejbližší **volný** prostřední slot |
 | Zahazování | Jen když `počet středních > počet prostředních slotů` (nechá se zleva podle `t`) |
 
-Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. `includeSteps` při `stepCount`: s override = offsety od override stepu, bez = `_includeTones`. Key křivka hýbe whitelistem jen s LM `colorOverride` (offsety). `pivotTone` se při `stepCount` nemění.
+Hue i chroma interpolate parametry se normalizují stejně. Počet Bézier segmentů se dorovná na `points.length - 1`. Whitelist při `stepCount`: s override = offsety od override stepu, bez = tones; dirty DM zvlášť. Key křivka hýbe whitelistem jen s příslušným `colorOverride`. `pivotTone` se při `stepCount` nemění.
 
 ---
 
@@ -233,7 +232,7 @@ Příklady jmen (po `sanitizePaletteName`):
 * `--key-palette-0`, `--key-palette-10`, …, `--key-palette-{end+10}`
 * totéž pro DM: `--key-palette-dm-…`
 * full custom: stejně včetně `0` / `end+10` + `--*-0-state1|2` → `var(--*-10|20)`
-* partial `includeSteps`: jen whitelisted kroky (**bez** `0` / `max` / ghost `0-state*`), `--{name}-dm-…`
+* partial `includeSteps` / dirty `includeStepsDm`: jen whitelisted kroky (**bez** `0` / `max` / ghost `0-state*`), `--{name}-dm-…`
 
 U kroků palety jsou v komentáři T (key) nebo H/C (custom).
 

@@ -25,6 +25,9 @@ import {
   resolveModeInteractionStates,
   getSteps,
   CHROMA_MAX,
+  STATE_DELTA_LIMIT,
+  STATE2_SCALE_MIN,
+  STATE2_SCALE_MAX,
   KEY_PALETTE_NAME,
   DEFAULT_BEZIER,
   LINEAR_BEZIER,
@@ -40,11 +43,13 @@ import {
   formatIncludeSteps,
   parseIncludeStepsInput,
   resolveIncludeSteps,
+  resolvePublishedIncludeSteps,
   normalizeIncludeSteps,
-  isFullIncludeSteps,
+  isFullPublishedIncludeSteps,
   setIncludeStepsIntent,
+  setIncludeStepsDmIntent,
   collapseParamsForSingleIncludeStep,
-  isSingleIncludeStep,
+  isSinglePublishedIncludeStep,
   applyRelativeFixedChromaAtStep,
   applyBrandColor,
   clearBrandConfig,
@@ -152,7 +157,14 @@ function restoreBrandCurveFromBaseline() {
  * @param {ReturnType<typeof createCustomPalette>} palette
  */
 function restoreBrandOverrideFromBaseline(palette) {
-  setColorOverride(palette, brandModifierBaseline?.colorOverrideHex ?? null);
+  const hex = brandModifierBaseline?.colorOverrideHex ?? null;
+  if (hex) {
+    setColorOverride(palette, hex);
+    return;
+  }
+  const steps = getSteps(state.stepCount);
+  const keys = generateKeyPalettes(state.keyPalette, steps);
+  setColorOverride(palette, null, 'lm', keys.lm, steps);
 }
 
 /** Palette+mode keys (`id:lm` / `id:dm`) with Override color UI open (hex may still be empty). */
@@ -775,6 +787,13 @@ function createConfigPanelBody() {
 }
 
 function render() {
+  dismissFloatingPanels();
+  disconnectSliderResizeObservers();
+  if (previewRaf !== null) {
+    cancelAnimationFrame(previewRaf);
+    previewRaf = null;
+  }
+
   const expandedParamGroups = collectExpandedParamGroups();
   const tokensPanelExpanded = collectCollapsePanelExpanded('tokens');
   const configPanelExpanded = collectCollapsePanelExpanded('config');
@@ -897,10 +916,10 @@ function syncChromaMaxMarker(controlKey, maxChroma) {
  */
 function syncChromaControls(palette, mode, keyResult, steps) {
   const chroma = palette[mode].chroma;
-  const published = resolveIncludeSteps(palette.includeSteps, steps);
+  const published = resolvePublishedIncludeSteps(palette, mode, steps);
 
   if (chroma.mode === 'fixed') {
-    if (isSingleIncludeStep(palette.includeSteps, steps)) {
+    if (isSinglePublishedIncludeStep(palette, mode, steps)) {
       const step = published[0];
       const controlKey = `${palette.id}:${mode}:single:${step}`;
       const limit = chromaLimitAtStep(palette[mode].hue, keyResult, steps, step);
@@ -959,19 +978,39 @@ function refreshPreviews() {
   for (const palette of state.customPalettes) {
     const results = customPalettes[palette.id];
     if (!results) continue;
-    const published = resolveIncludeSteps(palette.includeSteps, steps);
-    const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
-    patchPreviewRow(`custom-${palette.id}-lm`, results.lm, published, endStep, 'hc', includePoles);
-    patchPreviewRow(`custom-${palette.id}-dm`, results.dm, published, endStep, 'hc', includePoles);
+    const publishedLm = resolvePublishedIncludeSteps(palette, 'lm', steps);
+    const publishedDm = resolvePublishedIncludeSteps(palette, 'dm', steps);
+    patchPreviewRow(
+      `custom-${palette.id}-lm`, results.lm, publishedLm, endStep, 'hc',
+      isFullPublishedIncludeSteps(palette, 'lm', steps),
+    );
+    patchPreviewRow(
+      `custom-${palette.id}-dm`, results.dm, publishedDm, endStep, 'hc',
+      isFullPublishedIncludeSteps(palette, 'dm', steps),
+    );
 
     const includeInput = app.querySelector(`#include-steps-${palette.id}`);
     if (includeInput instanceof HTMLInputElement) {
       if (palette.includeSteps == null) {
         includeInput.value = '';
       } else {
-        includeInput.value = formatIncludeSteps(published);
+        includeInput.value = formatIncludeSteps(publishedLm);
       }
       syncHugInputWidth(includeInput);
+    }
+
+    const includeDmInput = app.querySelector(`#include-steps-dm-${palette.id}`);
+    if (includeDmInput instanceof HTMLInputElement) {
+      if (palette.includeStepsDm == null) {
+        includeDmInput.value = '';
+        includeDmInput.placeholder = palette.includeSteps == null
+          ? String(state.stepCount)
+          : formatIncludeSteps(publishedLm);
+      } else {
+        includeDmInput.value = formatIncludeSteps(publishedDm);
+        includeDmInput.placeholder = String(state.stepCount);
+      }
+      syncHugInputWidth(includeDmInput);
     }
   }
 
@@ -991,6 +1030,23 @@ function syncKeyDmAutoInterpolatorField() {
 }
 
 let previewRaf = null;
+
+/** @type {(() => void) | null} */
+let closeActiveFloating = null;
+
+/** @type {Set<ResizeObserver>} */
+const sliderResizeObservers = new Set();
+
+function dismissFloatingPanels() {
+  const fn = closeActiveFloating;
+  closeActiveFloating = null;
+  fn?.();
+}
+
+function disconnectSliderResizeObservers() {
+  for (const ro of sliderResizeObservers) ro.disconnect();
+  sliderResizeObservers.clear();
+}
 
 function scheduleRefreshPreviews() {
   if (previewRaf !== null) return;
@@ -1123,7 +1179,7 @@ function applyInteractionSwatchLevel(colorEl, level) {
   if (!ctx) return;
   const valueEl = colorEl.querySelector('.swatch-value');
   const states = ctx.getStates();
-  const cfg = resolveInteractionStates(states, getSteps(state.stepCount));
+  const cfg = resolveInteractionStates(states);
   const pivotTone = typeof ctx.getPivotTone === 'function' ? ctx.getPivotTone() : 40;
 
   if (cfg.delivery === 'runtime' && Number.isFinite(ctx.step)) {
@@ -1253,7 +1309,7 @@ function patchSwatchWrap(wrap, name, hex, data, valueFormat) {
 }
 
 /**
- * Ensure LM has full states; DM has deltas only (strip shared keys from legacy configs).
+ * Ensure LM has full states; DM has deltas only.
  * Always normalize in place so UI sliders keep a stable object reference.
  * @param {'lm' | 'dm'} mode
  */
@@ -1262,24 +1318,20 @@ function ensureKeyModeStates(mode) {
     if (!state.keyPalette.dm.states) {
       state.keyPalette.dm.states = createDefaultInteractionDeltas(true);
     } else {
-      const dm = state.keyPalette.dm.states;
-      Object.assign(dm, resolveInteractionDeltas(dm, true));
-      for (const key of Object.keys(dm)) {
-        if (key !== 'deltaMin' && key !== 'deltaMax' && key !== 'state2Scale') {
-          delete dm[key];
-        }
-      }
+      Object.assign(
+        state.keyPalette.dm.states,
+        resolveInteractionDeltas(state.keyPalette.dm.states, true),
+      );
     }
     return;
   }
   if (!state.keyPalette.lm.states) {
-    state.keyPalette.lm.states = createDefaultInteractionStates(state.stepCount);
+    state.keyPalette.lm.states = createDefaultInteractionStates();
   } else {
     Object.assign(
       state.keyPalette.lm.states,
       normalizeStoredInteractionStates(
         /** @type {Partial<import('../src/color-engine.js').InteractionStatesConfig>} */ (state.keyPalette.lm.states),
-        getSteps(state.stepCount),
       ),
     );
   }
@@ -1296,11 +1348,10 @@ function createInteractionHandlers(mode) {
     getStates: () => {
       ensureKeyModeStates('lm');
       ensureKeyModeStates(mode);
-      return resolveModeInteractionStates(state.keyPalette, mode, getSteps(state.stepCount));
+      return resolveModeInteractionStates(state.keyPalette, mode);
     },
     getPivotTone: () => {
-      const steps = getSteps(state.stepCount);
-      const states = resolveModeInteractionStates(state.keyPalette, mode, steps);
+      const states = resolveModeInteractionStates(state.keyPalette, mode);
       return resolvePivotTone(states.pivotTone);
     },
   };
@@ -1409,9 +1460,8 @@ function createStepCountControl() {
     input.value = String(value);
     syncHugInputWidth(input);
     if (value === state.stepCount) return;
-    const previousStepCount = state.stepCount;
     state.stepCount = value;
-    normalizeStateForStepCount(state, previousStepCount);
+    normalizeStateForStepCount(state);
     reapplyBrandPerfectFitAfterStepCountChange();
     render();
   });
@@ -1420,7 +1470,7 @@ function createStepCountControl() {
 }
 
 /**
- * Power-user whitelist of published grid steps for a custom palette.
+ * Power-user whitelist of published grid steps (LM).
  * Default (`includeSteps === null`): empty value + muted placeholder = key `stepCount`.
  * Clear → back to default (full key grid published).
  * @param {ReturnType<typeof createCustomPalette>} palette
@@ -1430,7 +1480,7 @@ function createIncludeStepsControl(palette, gridSteps) {
   const group = document.createElement('div');
   group.className = 'control-group steps-control include-steps-control';
 
-  const stepsHint = 'Whitelist of published step ids (e.g. 10-20-30). With Override color on, steps stay as offsets around the override step (hex tone). Without override, step count changes remap by tone; key curve does not move the whitelist.';
+  const stepsHint = 'LM whitelist of published step ids (e.g. 10-20-30). With Override color on, steps stay as offsets around the LM override step (hex tone). Without override, step count changes remap by tone; key curve does not move the whitelist.';
 
   const inputId = `include-steps-${palette.id}`;
   const label = document.createElement('label');
@@ -1446,7 +1496,7 @@ function createIncludeStepsControl(palette, gridSteps) {
   input.className = 'ui-control ui-control--hug';
   input.autocomplete = 'off';
   input.spellcheck = false;
-  input.setAttribute('aria-label', 'Published steps');
+  input.setAttribute('aria-label', 'Published steps (LM)');
   input.title = stepsHint;
   input.placeholder = defaultPlaceholder;
   if (palette.includeSteps == null) {
@@ -1478,10 +1528,87 @@ function createIncludeStepsControl(palette, gridSteps) {
       input.placeholder = defaultPlaceholder;
     } else {
       input.value = formatIncludeSteps(palette.includeSteps);
-      if (isSingleIncludeStep(palette.includeSteps, gridSteps)) {
-        collapseParamsForSingleIncludeStep(palette, gridSteps);
-      }
+      collapseParamsForSingleIncludeStep(palette, gridSteps);
     }
+    syncHugInputWidth(input);
+    render();
+  };
+
+  input.addEventListener('input', () => syncHugInputWidth(input));
+  input.addEventListener('change', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    }
+  });
+
+  group.appendChild(input);
+  return group;
+}
+
+/**
+ * DM published steps. Empty / clear = inherit LM (including LM sync).
+ * Any commit with a value marks DM dirty with the same tone/offset rules around DM override.
+ * @param {ReturnType<typeof createCustomPalette>} palette
+ * @param {number[]} gridSteps
+ */
+function createIncludeStepsDmControl(palette, gridSteps) {
+  const group = document.createElement('div');
+  group.className = 'control-group steps-control include-steps-control';
+
+  const stepsHint = 'DM whitelist. Empty = same as Steps (LM), including LM sync. Edit to diverge; clear to follow LM again. With DM Override color, dirty steps stay as offsets around the DM override step.';
+
+  const inputId = `include-steps-dm-${palette.id}`;
+  const label = document.createElement('label');
+  label.htmlFor = inputId;
+  label.textContent = 'Steps DM';
+  label.title = stepsHint;
+  group.appendChild(label);
+
+  const publishedLm = resolvePublishedIncludeSteps(palette, 'lm', gridSteps);
+  const inheritPlaceholder = palette.includeSteps == null
+    ? String(state.stepCount)
+    : formatIncludeSteps(publishedLm);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = inputId;
+  input.className = 'ui-control ui-control--hug';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'Published steps (DM)');
+  input.title = stepsHint;
+
+  if (palette.includeStepsDm == null) {
+    input.value = '';
+    input.placeholder = inheritPlaceholder;
+  } else {
+    input.value = formatIncludeSteps(resolveIncludeSteps(palette.includeStepsDm, gridSteps));
+    input.placeholder = String(state.stepCount);
+  }
+  syncHugInputWidth(input);
+
+  const commit = () => {
+    const raw = input.value.trim();
+    const keyDm = generateKeyPalettes(state.keyPalette, gridSteps).dm;
+    if (!raw) {
+      setIncludeStepsDmIntent(palette, null, keyDm, gridSteps);
+      input.value = '';
+      input.placeholder = palette.includeSteps == null
+        ? String(state.stepCount)
+        : formatIncludeSteps(resolvePublishedIncludeSteps(palette, 'lm', gridSteps));
+      syncHugInputWidth(input);
+      render();
+      return;
+    }
+
+    // Dirty: null = inherit; full grid → runtime `[]`; partial → concrete ids.
+    const next = resolveIncludeSteps(parseIncludeStepsInput(raw, gridSteps), gridSteps);
+    setIncludeStepsDmIntent(palette, next, keyDm, gridSteps);
+    input.value = formatIncludeSteps(resolvePublishedIncludeSteps(palette, 'dm', gridSteps));
+    input.placeholder = String(state.stepCount);
+    collapseParamsForSingleIncludeStep(palette, gridSteps);
     syncHugInputWidth(input);
     render();
   };
@@ -1865,27 +1992,34 @@ function createStatesDeltaGroup(config, mode, expandedParamGroups) {
   const row = document.createElement('div');
   row.className = 'control-row';
 
-  row.appendChild(createSliderControl('Delta min (near bg)', states.deltaMin, 0, 40, (v) => {
+  row.appendChild(createSliderControl('Delta min (near bg)', states.deltaMin, 0, STATE_DELTA_LIMIT, (v) => {
     states.deltaMin = v;
     scheduleRefreshPreviews();
   }));
 
-  row.appendChild(createSliderControl('Delta max (far from bg)', states.deltaMax, 0, 40, (v) => {
+  row.appendChild(createSliderControl('Delta max (far from bg)', states.deltaMax, 0, STATE_DELTA_LIMIT, (v) => {
     states.deltaMax = v;
     scheduleRefreshPreviews();
   }));
 
-  row.appendChild(createSliderControl('State2 scale (pressed)', states.state2Scale, 1, 4, (v) => {
-    states.state2Scale = v;
-    scheduleRefreshPreviews();
-  }, { step: 0.1 }));
+  row.appendChild(createSliderControl(
+    'State2 scale (pressed)',
+    states.state2Scale,
+    STATE2_SCALE_MIN,
+    STATE2_SCALE_MAX,
+    (v) => {
+      states.state2Scale = v;
+      scheduleRefreshPreviews();
+    },
+    { step: 0.1 },
+  ));
 
   body.appendChild(row);
 
   function syncStatesUi() {
     if (isDm || !lmStates || !spaceSelect || !gamutSelect || !relativeRow || !relativeCb) return;
 
-    Object.assign(lmStates, normalizeStoredInteractionStates(lmStates, getSteps(state.stepCount)));
+    Object.assign(lmStates, normalizeStoredInteractionStates(lmStates));
     const isBuild = lmStates.delivery === 'build';
     const spaceEl = spaceSelect.querySelector('select');
     const gamutEl = gamutSelect.querySelector('select');
@@ -2072,6 +2206,11 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
     palette.includeSteps = null;
     palette._includeTones = null;
   }
+  if (palette.includeStepsDm === undefined) {
+    palette.includeStepsDm = null;
+    palette._includeTonesDm = null;
+    palette._includeOffsetsDm = null;
+  }
 
   const titleInput = document.createElement('input');
   titleInput.type = 'text';
@@ -2097,17 +2236,17 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
   });
 
   const tokenName = palette.name;
-  const publishedSteps = resolveIncludeSteps(palette.includeSteps, steps);
-  const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
-  const singleStep = isSingleIncludeStep(palette.includeSteps, steps)
-    ? publishedSteps[0]
-    : null;
 
   for (const mode of /** @type {const} */ (['lm', 'dm'])) {
     const keyResult = keyResults[mode];
     const customResult = paletteResults[mode];
     const modeLabel = formatPaletteModeLabel(tokenName, mode);
     const suffix = mode === 'dm' ? '-dm' : '';
+    const publishedSteps = resolvePublishedIncludeSteps(palette, mode, steps);
+    const includePoles = isFullPublishedIncludeSteps(palette, mode, steps);
+    const singleStep = isSinglePublishedIncludeStep(palette, mode, steps)
+      ? publishedSteps[0]
+      : null;
 
     const segment = document.createElement('div');
     segment.className = 'palette-mode-segment';
@@ -2145,6 +2284,7 @@ function createCustomPaletteFieldset(palette, keyResults, paletteResults, steps,
   actions.className = 'palette-header-actions';
 
   actions.appendChild(createIncludeStepsControl(palette, steps));
+  actions.appendChild(createIncludeStepsDmControl(palette, steps));
 
   const index = state.customPalettes.findIndex((p) => p.id === palette.id);
   const count = state.customPalettes.length;
@@ -2343,7 +2483,7 @@ function createColorOverrideControls(palette, mode, keyResult, steps) {
   const commitHex = () => {
     const raw = hexInput.value.trim();
     if (!raw) {
-      setColorOverride(palette, null, mode);
+      setColorOverride(palette, null, mode, keyResult, steps);
       colorOverrideUiOpen.add(uiKey);
       hexInput.value = '';
       render();
@@ -2380,7 +2520,7 @@ function createColorOverrideControls(palette, mode, keyResult, steps) {
       // No default hex — override applies only after a valid hex is entered.
     } else {
       colorOverrideUiOpen.delete(uiKey);
-      setColorOverride(palette, null, mode);
+      setColorOverride(palette, null, mode, keyResult, steps);
       fields.hidden = true;
       hexInput.value = '';
       // Brand Override nearest / Perfect fit owned this lock — drop brand link + sync brand toggles.
@@ -2453,6 +2593,9 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
           ? param.points[0]?.value ?? 0
           : param.value;
         Object.assign(param, createFixedParam(val));
+        delete /** @type {Record<string, unknown>} */ (param).points;
+        delete /** @type {Record<string, unknown>} */ (param).interpolators;
+        delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
         if (chromaCtx) {
           const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
           clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
@@ -3070,7 +3213,7 @@ function normalizeHctFromHex(hexIn) {
  * @param {{ onChange: (hex: string) => void, onDone?: () => void, memoryKey?: string }} handlers
  */
 function openHctColorPicker(anchor, initialHex, handlers) {
-  document.querySelector('.hct-picker-panel')?.remove();
+  dismissFloatingPanels();
   document.querySelectorAll('.hct-picker-open').forEach((el) => {
     el.classList.remove('hct-picker-open');
   });
@@ -3343,6 +3486,7 @@ function openHctColorPicker(anchor, initialHex, handlers) {
   };
 
   const close = () => {
+    if (closeActiveFloating === close) closeActiveFloating = null;
     onPointerUp();
     panel.remove();
     anchor.classList.remove('hct-picker-open');
@@ -3367,6 +3511,7 @@ function openHctColorPicker(anchor, initialHex, handlers) {
     e.stopPropagation();
     close();
   });
+  closeActiveFloating = close;
   window.addEventListener('keydown', onKeyDown);
   requestAnimationFrame(() => {
     document.addEventListener('pointerdown', onOutside, true);
@@ -3467,6 +3612,7 @@ function attachSliderVisualSync(wrap, range, markerKey = null, getMarkerMax = nu
   };
   sync();
   const ro = new ResizeObserver(sync);
+  sliderResizeObservers.add(ro);
   ro.observe(wrap);
 }
 
@@ -3812,7 +3958,7 @@ function sampleCubicBezier(bezier, steps = 48) {
  * @param {() => void} onClose
  */
 function openBezierGraphEditor(initial, anchor, onChange, onClose) {
-  document.querySelector('.easing-editor-panel')?.remove();
+  dismissFloatingPanels();
 
   /** @type {Bezier} */
   let current = [...initial];
@@ -4111,6 +4257,7 @@ function openBezierGraphEditor(initial, anchor, onChange, onClose) {
   };
 
   const close = () => {
+    if (closeActiveFloating === close) closeActiveFloating = null;
     onPointerUp();
     panel.remove();
     window.removeEventListener('keydown', onKeyDown);
@@ -4134,6 +4281,7 @@ function openBezierGraphEditor(initial, anchor, onChange, onClose) {
     e.stopPropagation();
     close();
   });
+  closeActiveFloating = close;
   window.addEventListener('keydown', onKeyDown);
   // Defer so the opening click does not immediately close.
   requestAnimationFrame(() => {

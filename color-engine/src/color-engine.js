@@ -47,12 +47,14 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * @typedef {{ hex: string }} ColorOverride
  */
 /**
- * Custom palette. `includeSteps` — whitelist of grid step ids to publish (tokens + GUI).
+ * Custom palette. `includeSteps` — LM whitelist of grid step ids (tokens + GUI).
  * `null` / omitted / full grid = all key steps. Never includes min/max.
- * Runtime `_includeTones` — LM key tones (stepCount remap without override).
- * Runtime `_includeOffsets` — grid-index offsets from LM colorOverride step (key-T / stepCount with override).
+ * `includeStepsDm` — DM whitelist; `null` = inherit LM published steps (including LM sync).
+ * Dirty: concrete step ids, or `[]` = dirty full (always current key grid — never a frozen snapshot).
+ * When dirty partial, same tone/offset rules as LM around DM’s override (`_includeTonesDm` / `_includeOffsetsDm`).
+ * Runtime `_includeTones` / `_includeOffsets` — LM only.
  * `colorOverride` / `colorOverrideDm` — optional exact hex on LM / DM nearest-T step (export/import).
- * @typedef {{ name: string, includeSteps: number[] | null, colorOverride: ColorOverride | null, colorOverrideDm: ColorOverride | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig }, _includeTones?: number[] | null, _includeOffsets?: number[] | null }} CustomPaletteConfig
+ * @typedef {{ name: string, includeSteps: number[] | null, includeStepsDm: number[] | null, colorOverride: ColorOverride | null, colorOverrideDm: ColorOverride | null, lm: { hue: ParamConfig, chroma: ParamConfig }, dm: { hue: ParamConfig, chroma: ParamConfig }, _includeTones?: number[] | null, _includeOffsets?: number[] | null, _includeTonesDm?: number[] | null, _includeOffsetsDm?: number[] | null }} CustomPaletteConfig
  */
 /**
  * Optional brand seed (shared in config).
@@ -90,7 +92,12 @@ export const DEFAULT_STATE_DELTA_MAX_DM = 15;
 /** Default state2 magnitude = state1 × this scale. */
 export const DEFAULT_STATE2_SCALE = 2;
 
-export const ENGINE_CONFIG_VERSION = 1;
+/** Ceiling for `deltaMin` / `deltaMax` (engine + GUI). */
+export const STATE_DELTA_LIMIT = 40;
+
+/** Allowed range for `state2Scale` (engine + GUI). */
+export const STATE2_SCALE_MIN = 1;
+export const STATE2_SCALE_MAX = 4;
 
 // ---------------------------------------------------------------------------
 // Steps & Bézier
@@ -137,7 +144,7 @@ export function parseIncludeStepsInput(raw, gridSteps) {
 }
 
 /**
- * Effective published steps for a custom palette (never empty; never min/max).
+ * Effective published steps from a raw whitelist (never empty; never min/max).
  * @param {number[] | null | undefined} includeSteps
  * @param {number[]} gridSteps
  * @returns {number[]}
@@ -147,6 +154,21 @@ export function resolveIncludeSteps(includeSteps, gridSteps) {
   const allowed = new Set(gridSteps);
   const out = [...new Set(includeSteps.filter((s) => allowed.has(s)))].sort((a, b) => a - b);
   return out.length ? out : gridSteps.slice();
+}
+
+/**
+ * Published steps for LM or DM. DM with `includeStepsDm == null` inherits LM.
+ * Dirty DM full is `[]` (always current grid via `resolveIncludeSteps`).
+ * @param {CustomPaletteConfig} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} gridSteps
+ * @returns {number[]}
+ */
+export function resolvePublishedIncludeSteps(palette, mode, gridSteps) {
+  if (mode === 'dm' && palette.includeStepsDm == null) {
+    return resolveIncludeSteps(palette.includeSteps, gridSteps);
+  }
+  return resolveIncludeSteps(mode === 'dm' ? palette.includeStepsDm : palette.includeSteps, gridSteps);
 }
 
 /**
@@ -161,7 +183,29 @@ export function isFullIncludeSteps(includeSteps, gridSteps) {
 }
 
 /**
- * Normalize stored whitelist: `null` when publishing the full key grid.
+ * Dirty DM full sentinel: `[]` (distinct from `null` = inherit LM).
+ * @param {number[] | null | undefined} includeStepsDm
+ * @returns {boolean}
+ */
+export function isDirtyFullIncludeStepsDm(includeStepsDm) {
+  return Array.isArray(includeStepsDm) && includeStepsDm.length === 0;
+}
+
+/**
+ * @param {CustomPaletteConfig} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} gridSteps
+ * @returns {boolean}
+ */
+export function isFullPublishedIncludeSteps(palette, mode, gridSteps) {
+  if (mode === 'dm' && palette.includeStepsDm == null) {
+    return isFullIncludeSteps(palette.includeSteps, gridSteps);
+  }
+  return isFullIncludeSteps(mode === 'dm' ? palette.includeStepsDm : palette.includeSteps, gridSteps);
+}
+
+/**
+ * Normalize LM whitelist: `null` when publishing the full key grid.
  * @param {number[] | null | undefined} includeSteps
  * @param {number[]} gridSteps
  * @returns {number[] | null}
@@ -172,8 +216,23 @@ export function normalizeIncludeSteps(includeSteps, gridSteps) {
   return isFullIncludeSteps(resolved, gridSteps) ? null : resolved;
 }
 
+/** @param {'lm' | 'dm'} mode */
+function includeStepsField(mode) {
+  return mode === 'dm' ? 'includeStepsDm' : 'includeSteps';
+}
+
+/** @param {'lm' | 'dm'} mode */
+function includeTonesField(mode) {
+  return mode === 'dm' ? '_includeTonesDm' : '_includeTones';
+}
+
+/** @param {'lm' | 'dm'} mode */
+function includeOffsetsField(mode) {
+  return mode === 'dm' ? '_includeOffsetsDm' : '_includeOffsets';
+}
+
 /**
- * Lock whitelist intent as LM key tones; sets `includeSteps` + `_includeTones`.
+ * Lock LM whitelist intent as key tones; sets `includeSteps` + `_includeTones`.
  * With LM colorOverride, also locks `_includeOffsets` relative to the override step.
  * @param {CustomPaletteConfig} palette
  * @param {number[] | null | undefined} includeSteps
@@ -192,132 +251,216 @@ export function setIncludeStepsIntent(palette, includeSteps, keyLm, steps) {
     const tone = keyLm.steps[step]?.tone;
     return tone != null && Number.isFinite(tone) ? tone : 0;
   });
-  lockIncludeOffsetsAroundOverride(palette, keyLm, steps, normalized);
+  lockIncludeOffsetsAroundOverride(palette, keyLm, steps, normalized, 'lm');
 }
 
 /**
- * Index offsets of `includeSteps` from the LM colorOverride step (includes 0).
+ * Lock DM whitelist. `null` → inherit LM (clears DM tones/offsets).
+ * Dirty full → `[]` (always current grid). Dirty partial → concrete step ids.
  * @param {CustomPaletteConfig} palette
- * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {number[] | null | undefined} includeStepsDm — `null` = inherit LM
+ * @param {ReturnType<typeof generateKeyPalette>} keyDm
+ * @param {number[]} steps
+ */
+export function setIncludeStepsDmIntent(palette, includeStepsDm, keyDm, steps) {
+  if (includeStepsDm == null) {
+    palette.includeStepsDm = null;
+    palette._includeTonesDm = null;
+    palette._includeOffsetsDm = null;
+    return;
+  }
+  const resolved = resolveIncludeSteps(includeStepsDm, steps);
+  if (isFullIncludeSteps(resolved, steps)) {
+    palette.includeStepsDm = [];
+    palette._includeTonesDm = null;
+    palette._includeOffsetsDm = null;
+    return;
+  }
+  palette.includeStepsDm = resolved;
+  palette._includeTonesDm = resolved.map((step) => {
+    const tone = keyDm.steps[step]?.tone;
+    return tone != null && Number.isFinite(tone) ? tone : 0;
+  });
+  lockIncludeOffsetsAroundOverride(palette, keyDm, steps, resolved, 'dm');
+}
+
+/**
+ * Index offsets of a whitelist from that mode’s colorOverride step (includes 0).
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
  * @param {number[]} includeSteps
+ * @param {'lm' | 'dm'} mode
  */
-function lockIncludeOffsetsAroundOverride(palette, keyLm, steps, includeSteps) {
-  const ovStep = resolveColorOverrideStep(palette, keyLm, steps);
+function lockIncludeOffsetsAroundOverride(palette, keyResult, steps, includeSteps, mode) {
+  const offsetsKey = includeOffsetsField(mode);
+  const ovStep = resolveColorOverrideStep(palette, keyResult, steps, mode);
   if (ovStep == null) {
-    palette._includeOffsets = null;
+    palette[offsetsKey] = null;
     return;
   }
   const ovIdx = steps.indexOf(ovStep);
   if (ovIdx < 0) {
-    palette._includeOffsets = null;
+    palette[offsetsKey] = null;
     return;
   }
   const offsets = includeSteps.map((step) => steps.indexOf(step) - ovIdx);
   if (!offsets.includes(0)) offsets.push(0);
   offsets.sort((a, b) => a - b);
-  palette._includeOffsets = offsets;
+  palette[offsetsKey] = offsets;
 }
 
 /**
- * Place whitelist around LM colorOverride step using `_includeOffsets`.
+ * Place mode whitelist around that mode’s colorOverride using offsets.
  * @param {CustomPaletteConfig} palette
- * @param {ReturnType<typeof generateKeyPalette>} keyLm
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
  * @param {number[]} steps
+ * @param {'lm' | 'dm'} mode
  */
-function syncIncludeStepsAroundOverride(palette, keyLm, steps) {
-  const ovStep = resolveColorOverrideStep(palette, keyLm, steps);
+function syncIncludeStepsAroundOverride(palette, keyResult, steps, mode) {
+  const stepsKey = includeStepsField(mode);
+  const offsetsKey = includeOffsetsField(mode);
+  const ovStep = resolveColorOverrideStep(palette, keyResult, steps, mode);
   if (ovStep == null || !steps.length) return;
 
-  const published = resolveIncludeSteps(palette.includeSteps, steps);
-  if (palette.includeSteps == null && (palette._includeOffsets == null || !palette._includeOffsets.length)) {
+  const stored = palette[stepsKey];
+  // LM null = full grid; DM null = inherit (caller must skip DM inherit).
+  if (stored == null) {
+    palette[offsetsKey] = null;
+    return;
+  }
+  // Dirty DM full (`[]` or concrete list equal to current grid): always current grid.
+  if (mode === 'dm' && (isDirtyFullIncludeStepsDm(stored) || isFullIncludeSteps(stored, steps))) {
+    palette.includeStepsDm = [];
+    palette[offsetsKey] = null;
+    return;
+  }
+  // LM already on full grid (unusual concrete list): no offset dance.
+  if (mode === 'lm' && isFullIncludeSteps(stored, steps) && !palette[offsetsKey]?.length) {
+    palette[offsetsKey] = null;
     return;
   }
 
-  if (!palette._includeOffsets?.length) {
-    if (!published.length || palette.includeSteps == null) {
-      palette._includeOffsets = null;
-      return;
-    }
-    lockIncludeOffsetsAroundOverride(palette, keyLm, steps, published);
+  if (!palette[offsetsKey]?.length) {
+    lockIncludeOffsetsAroundOverride(palette, keyResult, steps, resolveIncludeSteps(stored, steps), mode);
   }
 
   const ovIdx = steps.indexOf(ovStep);
-  if (ovIdx < 0 || !palette._includeOffsets?.length) return;
+  if (ovIdx < 0 || !palette[offsetsKey]?.length) return;
 
   const last = steps.length - 1;
-  const mapped = palette._includeOffsets.map((off) => {
+  const mapped = palette[offsetsKey].map((off) => {
     const idx = Math.min(last, Math.max(0, ovIdx + off));
     return steps[idx];
   });
   if (!mapped.includes(ovStep)) mapped.push(ovStep);
-  palette.includeSteps = normalizeIncludeSteps(mapped, steps);
-  if (palette.includeSteps == null) palette._includeOffsets = null;
-}
 
-/**
- * Re-resolve `includeSteps`: with LM colorOverride → offsets from override step;
- * otherwise from `_includeTones` (nearest T). Seeds intent once if missing.
- * @param {EngineState} state
- * @param {ReturnType<typeof generateKeyPalette>} keyLm
- * @param {number[]} steps
- * @param {{ requireColorOverride?: boolean }} [options] — when true, only palettes with LM `colorOverride`
- */
-export function syncIncludeStepsFromTones(state, keyLm, steps, options = {}) {
-  const requireOverride = Boolean(options.requireColorOverride);
-  for (const palette of state.customPalettes) {
-    const hasOverride = Boolean(parseBrandHex(palette.colorOverride?.hex ?? ''));
-    if (requireOverride && !hasOverride) continue;
-
-    if (hasOverride) {
-      syncIncludeStepsAroundOverride(palette, keyLm, steps);
-      continue;
-    }
-
-    palette._includeOffsets = null;
-
-    if (palette.includeSteps == null && (palette._includeTones == null || !palette._includeTones.length)) {
-      palette._includeTones = null;
-      continue;
-    }
-    if (!palette._includeTones?.length) {
-      if (!palette.includeSteps?.length) {
-        palette._includeTones = null;
-        palette.includeSteps = null;
-        continue;
-      }
-      palette._includeTones = palette.includeSteps.map((step) => {
-        const tone = keyLm.steps[step]?.tone;
-        return tone != null && Number.isFinite(tone) ? tone : 0;
-      });
-    }
-    const mapped = palette._includeTones.map((tone) => nearestStepForTone(keyLm, steps, tone));
+  if (mode === 'lm') {
     palette.includeSteps = normalizeIncludeSteps(mapped, steps);
-    if (palette.includeSteps == null) palette._includeTones = null;
+    if (palette.includeSteps == null) palette._includeOffsets = null;
+  } else if (isFullIncludeSteps(mapped, steps)) {
+    palette.includeStepsDm = [];
+    palette._includeOffsetsDm = null;
+  } else {
+    palette.includeStepsDm = resolveIncludeSteps(mapped, steps);
   }
 }
 
 /**
- * @param {number[] | null | undefined} includeSteps
- * @param {number[]} gridSteps
- * @returns {boolean}
+ * Remap one mode’s whitelist from tones (no override).
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {'lm' | 'dm'} mode
  */
-export function isSingleIncludeStep(includeSteps, gridSteps) {
-  return resolveIncludeSteps(includeSteps, gridSteps).length === 1;
+function syncIncludeStepsFromTonesForMode(palette, keyResult, steps, mode) {
+  const stepsKey = includeStepsField(mode);
+  const tonesKey = includeTonesField(mode);
+  const offsetsKey = includeOffsetsField(mode);
+
+  palette[offsetsKey] = null;
+
+  const stored = palette[stepsKey];
+  if (stored == null && (palette[tonesKey] == null || !palette[tonesKey].length)) {
+    palette[tonesKey] = null;
+    return;
+  }
+  // Dirty DM full (`[]` / full on current grid): always current grid.
+  if (mode === 'dm' && (isDirtyFullIncludeStepsDm(stored) || (stored != null && isFullIncludeSteps(stored, steps)))) {
+    palette.includeStepsDm = [];
+    palette[tonesKey] = null;
+    return;
+  }
+  if (!palette[tonesKey]?.length) {
+    if (!stored?.length) {
+      palette[tonesKey] = null;
+      if (mode === 'lm') palette.includeSteps = null;
+      else palette.includeStepsDm = null;
+      return;
+    }
+    palette[tonesKey] = stored.map((step) => {
+      const tone = keyResult.steps[step]?.tone;
+      return tone != null && Number.isFinite(tone) ? tone : 0;
+    });
+  }
+  const mapped = palette[tonesKey].map((tone) => nearestStepForTone(keyResult, steps, tone));
+  if (mode === 'lm') {
+    palette.includeSteps = normalizeIncludeSteps(mapped, steps);
+    if (palette.includeSteps == null) palette._includeTones = null;
+  } else if (isFullIncludeSteps(mapped, steps)) {
+    palette.includeStepsDm = [];
+    palette._includeTonesDm = null;
+  } else {
+    palette.includeStepsDm = resolveIncludeSteps(mapped, steps);
+  }
 }
 
 /**
- * When only one step is published, collapse H/C interpolate → fixed at that step
- * (Fixed vs Interpolate is meaningless for a single color).
- * Chroma keeps `ratio` when the source interpolate point had one.
+ * Re-resolve LM / dirty-DM whitelists.
+ * With that mode’s colorOverride → offsets from override step; else `_includeTones*`.
+ * @param {EngineState} state
+ * @param {{ lm: ReturnType<typeof generateKeyPalette>, dm: ReturnType<typeof generateKeyPalette> }} keyResults
+ * @param {number[]} steps
+ * @param {{ requireColorOverride?: boolean }} [options] — when true, only modes with that mode’s override
+ */
+export function syncIncludeStepsFromTones(state, keyResults, steps, options = {}) {
+  const requireOverride = Boolean(options.requireColorOverride);
+  for (const palette of state.customPalettes) {
+    const hasLmOv = Boolean(parseBrandHex(palette.colorOverride?.hex ?? ''));
+    if (!requireOverride || hasLmOv) {
+      if (hasLmOv) syncIncludeStepsAroundOverride(palette, keyResults.lm, steps, 'lm');
+      else syncIncludeStepsFromTonesForMode(palette, keyResults.lm, steps, 'lm');
+    }
+
+    if (palette.includeStepsDm == null) continue;
+    const hasDmOv = Boolean(parseBrandHex(palette.colorOverrideDm?.hex ?? ''));
+    if (!requireOverride || hasDmOv) {
+      if (hasDmOv) syncIncludeStepsAroundOverride(palette, keyResults.dm, steps, 'dm');
+      else syncIncludeStepsFromTonesForMode(palette, keyResults.dm, steps, 'dm');
+    }
+  }
+}
+
+/**
+ * @param {CustomPaletteConfig} palette
+ * @param {'lm' | 'dm'} mode
+ * @param {number[]} gridSteps
+ * @returns {boolean}
+ */
+export function isSinglePublishedIncludeStep(palette, mode, gridSteps) {
+  return resolvePublishedIncludeSteps(palette, mode, gridSteps).length === 1;
+}
+
+/**
+ * When a mode publishes exactly one step, collapse that mode’s H/C interpolate → fixed.
  * @param {CustomPaletteConfig} palette
  * @param {number[]} gridSteps
  */
 export function collapseParamsForSingleIncludeStep(palette, gridSteps) {
-  const published = resolveIncludeSteps(palette.includeSteps, gridSteps);
-  if (published.length !== 1) return;
-  const step = published[0];
   for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+    const published = resolvePublishedIncludeSteps(palette, mode, gridSteps);
+    if (published.length !== 1) continue;
+    const step = published[0];
     for (const paramName of /** @type {const} */ (['hue', 'chroma'])) {
       const param = palette[mode][paramName];
       if (param.mode !== 'interpolate') continue;
@@ -683,15 +826,6 @@ export function resolveBrandPalette(state) {
 }
 
 /**
- * @param {string} raw
- * @returns {ColorOverride | null}
- */
-export function parseColorOverrideHex(raw) {
-  const hex = parseBrandHex(raw);
-  return hex ? { hex } : null;
-}
-
-/**
  * @param {'lm' | 'dm'} [mode]
  * @returns {'colorOverride' | 'colorOverrideDm'}
  */
@@ -708,24 +842,78 @@ function colorOverrideStepKey(mode = 'lm') {
 }
 
 /**
+ * After clearing a mode’s colorOverride: drop offsets and reseed tones from the
+ * current whitelist on the *current* key grid (so later stepCount remap matches
+ * what the user last saw, not pre-override tones / not a new-grid identity map).
+ * @param {CustomPaletteConfig} palette
+ * @param {ReturnType<typeof generateKeyPalette> | null | undefined} keyResult
+ * @param {number[] | null | undefined} steps
+ * @param {'lm' | 'dm'} mode
+ */
+function reseedIncludeTonesAfterOverrideClear(palette, keyResult, steps, mode) {
+  const tonesKey = includeTonesField(mode);
+  if (!keyResult || !steps?.length) {
+    palette[tonesKey] = null;
+    return;
+  }
+
+  if (mode === 'dm') {
+    if (palette.includeStepsDm == null || isDirtyFullIncludeStepsDm(palette.includeStepsDm)) {
+      palette[tonesKey] = null;
+      return;
+    }
+    if (isFullIncludeSteps(palette.includeStepsDm, steps)) {
+      palette.includeStepsDm = [];
+      palette[tonesKey] = null;
+      return;
+    }
+    const published = resolveIncludeSteps(palette.includeStepsDm, steps);
+    palette._includeTonesDm = published.map((step) => {
+      const tone = keyResult.steps[step]?.tone;
+      return tone != null && Number.isFinite(tone) ? tone : 0;
+    });
+    return;
+  }
+
+  if (palette.includeSteps == null) {
+    palette._includeTones = null;
+    return;
+  }
+  const published = resolveIncludeSteps(palette.includeSteps, steps);
+  palette._includeTones = published.map((step) => {
+    const tone = keyResult.steps[step]?.tone;
+    return tone != null && Number.isFinite(tone) ? tone : 0;
+  });
+}
+
+/**
  * @param {CustomPaletteConfig & { id?: string, _colorOverrideStep?: number | null, _colorOverrideStepDm?: number | null }} palette
  * @param {string | null} hex
  * @param {'lm' | 'dm'} [mode]
+ * @param {ReturnType<typeof generateKeyPalette> | null} [keyResult] — required on clear for correct tone reseed
+ * @param {number[] | null} [steps]
  */
-export function setColorOverride(palette, hex, mode = 'lm') {
+export function setColorOverride(palette, hex, mode = 'lm', keyResult = null, steps = null) {
   const ovKey = colorOverrideKey(mode);
   const stepKey = colorOverrideStepKey(mode);
+  const offsetsKey = includeOffsetsField(mode);
   if (!hex) {
     palette[ovKey] = null;
     palette[stepKey] = null;
-    if (mode === 'lm') palette._includeOffsets = null;
+    palette[offsetsKey] = null;
+    reseedIncludeTonesAfterOverrideClear(palette, keyResult, steps, mode);
     return;
   }
   const normalized = parseBrandHex(hex);
   palette[ovKey] = normalized ? { hex: normalized } : null;
-  if (!palette[ovKey]) palette[stepKey] = null;
-  // Re-seed offsets on next sync from current includeSteps vs new override step.
-  if (mode === 'lm') palette._includeOffsets = null;
+  if (!palette[ovKey]) {
+    palette[stepKey] = null;
+    palette[offsetsKey] = null;
+    reseedIncludeTonesAfterOverrideClear(palette, keyResult, steps, mode);
+    return;
+  }
+  // Re-seed offsets on next sync from current whitelist vs new override step.
+  palette[offsetsKey] = null;
 }
 
 /**
@@ -861,12 +1049,6 @@ export function applyColorOverrides(state, keyResults, customResults) {
       };
     }
   }
-}
-
-/** @deprecated Use applyColorOverrides — kept for older call sites. */
-export function applyBrandStepOverride(state, keyResults, customResults) {
-  applyColorOverrides(state, keyResults, customResults);
-  return null;
 }
 
 /**
@@ -1047,11 +1229,9 @@ export function resolvePivotTone(pivotTone) {
 
 /**
  * Full LM defaults (strategy + deltas).
- * @param {number} [stepCount=10] — unused (API compat); pivot is absolute T
  * @returns {InteractionStatesConfig}
  */
-export function createDefaultInteractionStates(stepCount = 10) {
-  void stepCount;
+export function createDefaultInteractionStates() {
   return {
     ...createDefaultInteractionDeltas(false),
     relativeChroma: true,
@@ -1080,9 +1260,9 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
     ? deltas.state2Scale
     : base.state2Scale;
   return {
-    deltaMin,
-    deltaMax,
-    state2Scale,
+    deltaMin: Math.min(STATE_DELTA_LIMIT, Math.max(0, deltaMin)),
+    deltaMax: Math.min(STATE_DELTA_LIMIT, Math.max(0, deltaMax)),
+    state2Scale: Math.min(STATE2_SCALE_MAX, Math.max(STATE2_SCALE_MIN, state2Scale)),
   };
 }
 
@@ -1090,11 +1270,9 @@ export function resolveInteractionDeltas(deltas, forDm = false) {
  * Stored LM states (config / GUI). Does **not** force runtime overrides —
  * preferences for space / relative / gamut survive delivery toggles.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
- * @param {number[]} [steps] — unused (API compat)
  * @returns {InteractionStatesConfig}
  */
-export function normalizeStoredInteractionStates(states, steps) {
-  void steps;
+export function normalizeStoredInteractionStates(states) {
   const deltas = resolveInteractionDeltas(states, false);
   return {
     ...deltas,
@@ -1110,11 +1288,10 @@ export function normalizeStoredInteractionStates(states, steps) {
  * Effective LM states for math / tokens (runtime → OKLCH + relativeChroma off).
  * Does not mutate stored preferences.
  * @param {Partial<InteractionStatesConfig> | null | undefined} states
- * @param {number[]} [steps]
  * @returns {InteractionStatesConfig}
  */
-export function resolveInteractionStates(states, steps) {
-  const stored = normalizeStoredInteractionStates(states, steps);
+export function resolveInteractionStates(states) {
+  const stored = normalizeStoredInteractionStates(states);
   if (stored.delivery !== 'runtime') return stored;
   return {
     ...stored,
@@ -1127,13 +1304,11 @@ export function resolveInteractionStates(states, steps) {
  * Effective states for a key mode: LM strategy shared; DM overrides only deltas.
  * @param {KeyPaletteState} keyPalette
  * @param {'lm' | 'dm'} mode
- * @param {number[]} [steps]
  * @returns {InteractionStatesConfig}
  */
-export function resolveModeInteractionStates(keyPalette, mode, steps) {
+export function resolveModeInteractionStates(keyPalette, mode) {
   const lm = resolveInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm?.states),
-    steps,
   );
   if (mode === 'lm') return lm;
   const dmDeltas = resolveInteractionDeltas(
@@ -1353,23 +1528,20 @@ export function applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps
  */
 export function applyRelativeCustomChroma(customPalettes, keyResults, steps) {
   for (const palette of customPalettes) {
-    const published = resolveIncludeSteps(palette.includeSteps, steps);
-    if (published.length === 1) {
-      collapseParamsForSingleIncludeStep(palette, steps);
-      const step = published[0];
-      for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+    collapseParamsForSingleIncludeStep(palette, steps);
+    for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+      const published = resolvePublishedIncludeSteps(palette, mode, steps);
+      if (published.length === 1) {
         applyRelativeFixedChromaAtStep(
           palette[mode].chroma,
           palette[mode].hue,
           keyResults[mode],
           steps,
-          step,
+          published[0],
         );
+      } else {
+        applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResults[mode], steps);
       }
-      continue;
-    }
-    for (const mode of /** @type {const} */ (['lm', 'dm'])) {
-      applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResults[mode], steps);
     }
   }
 }
@@ -1570,10 +1742,8 @@ function remapInterpolatePointsForSteps(points, steps) {
 /**
  * Keep interpolate H/C points aligned with the current step grid (mutates state).
  * @param {EngineState} state
- * @param {number} [previousStepCount] — unused for pivot (absolute T); kept for API / includeSteps callers
  */
-export function normalizeStateForStepCount(state, previousStepCount) {
-  void previousStepCount;
+export function normalizeStateForStepCount(state) {
   const steps = getSteps(state.stepCount);
 
   if (state.keyPalette?.lm?.states) {
@@ -1581,13 +1751,12 @@ export function normalizeStateForStepCount(state, previousStepCount) {
       state.keyPalette.lm.states,
       normalizeStoredInteractionStates(
         /** @type {Partial<InteractionStatesConfig>} */ (state.keyPalette.lm.states),
-        steps,
       ),
     );
   }
 
   const keyResults = generateKeyPalettes(state.keyPalette, steps);
-  syncIncludeStepsFromTones(state, keyResults.lm, steps);
+  syncIncludeStepsFromTones(state, keyResults, steps);
 
   for (const palette of state.customPalettes) {
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
@@ -1672,8 +1841,11 @@ export function createCustomPalette(name = 'palette-1') {
     id: `palette-${nextId++}`,
     name: sanitizePaletteName(name),
     includeSteps: null,
+    includeStepsDm: null,
     _includeTones: null,
     _includeOffsets: null,
+    _includeTonesDm: null,
+    _includeOffsetsDm: null,
     colorOverride: null,
     colorOverrideDm: null,
     lm: {
@@ -1830,15 +2002,9 @@ function parseInteractionStates(value, label) {
     throw new Error(`Invalid ${label}`);
   }
 
-  const parsed = normalizeStoredInteractionStates(
+  return normalizeStoredInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (value),
   );
-
-  if (parsed.deltaMin < 0 || parsed.deltaMax < 0 || parsed.state2Scale < 0) {
-    throw new Error(`${label} values must be non-negative`);
-  }
-
-  return parsed;
 }
 
 /**
@@ -1855,16 +2021,10 @@ function parseInteractionStatesDeltas(value, label) {
     throw new Error(`Invalid ${label}`);
   }
 
-  const parsed = resolveInteractionDeltas(
+  return resolveInteractionDeltas(
     /** @type {Partial<InteractionStatesDeltas>} */ (value),
     true,
   );
-
-  if (parsed.deltaMin < 0 || parsed.deltaMax < 0 || parsed.state2Scale < 0) {
-    throw new Error(`${label} values must be non-negative`);
-  }
-
-  return parsed;
 }
 
 /**
@@ -1963,28 +2123,34 @@ export function exportEngineConfig(state) {
   const keyPalette = JSON.parse(JSON.stringify(state.keyPalette));
   keyPalette.lm.states = normalizeStoredInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (keyPalette.lm.states),
-    steps,
   );
   keyPalette.dm.states = resolveInteractionDeltas(
     /** @type {Partial<InteractionStatesDeltas>} */ (keyPalette.dm.states),
     true,
   );
 
-  /** @type {{ version: number, stepCount: number, keyPalette: unknown, customPalettes: unknown[], brand?: BrandConfig }} */
+  /** @type {{ stepCount: number, keyPalette: unknown, customPalettes: unknown[], brand?: BrandConfig }} */
   const out = {
-    version: ENGINE_CONFIG_VERSION,
     stepCount: state.stepCount,
     keyPalette,
-    customPalettes: state.customPalettes.map(({ name, includeSteps, colorOverride, colorOverrideDm, lm, dm }) => {
-      const published = resolveIncludeSteps(includeSteps, steps);
+    customPalettes: state.customPalettes.map((palette) => {
+      const { name, includeSteps, includeStepsDm, colorOverride, colorOverrideDm, lm, dm } = palette;
+      const publishedLm = resolvePublishedIncludeSteps(palette, 'lm', steps);
+      const publishedDm = resolvePublishedIncludeSteps(palette, 'dm', steps);
       const normalized = normalizeIncludeSteps(includeSteps, steps);
-      /** @type {{ name: string, includeSteps?: number[], colorOverride?: ColorOverride, colorOverrideDm?: ColorOverride, lm: unknown, dm: unknown }} */
+      /** @type {{ name: string, includeSteps?: number[], includeStepsDm?: number[], colorOverride?: ColorOverride, colorOverrideDm?: ColorOverride, lm: unknown, dm: unknown }} */
       const paletteOut = {
         name: sanitizePaletteName(name),
-        lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps, published),
-        dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps, published),
+        lm: cloneModeParamsForConfig(lm, keyPalettes.lm, steps, publishedLm),
+        dm: cloneModeParamsForConfig(dm, keyPalettes.dm, steps, publishedDm),
       };
       if (normalized) paletteOut.includeSteps = normalized;
+      // Dirty DM only: omit when inheriting. Dirty full (`[]`) → explicit current grid.
+      if (includeStepsDm != null) {
+        paletteOut.includeStepsDm = isDirtyFullIncludeStepsDm(includeStepsDm) || isFullIncludeSteps(includeStepsDm, steps)
+          ? steps.slice()
+          : resolveIncludeSteps(includeStepsDm, steps);
+      }
       const ovHex = parseBrandHex(colorOverride?.hex ?? '');
       if (ovHex) paletteOut.colorOverride = { hex: ovHex };
       const ovDmHex = parseBrandHex(colorOverrideDm?.hex ?? '');
@@ -2017,10 +2183,6 @@ export function importEngineConfig(data) {
     throw new Error('Config must be a JSON object');
   }
 
-  if (data.version !== ENGINE_CONFIG_VERSION) {
-    throw new Error(`Unsupported config version: ${String(data.version)}`);
-  }
-
   if (typeof data.stepCount !== 'number' || !Number.isFinite(data.stepCount) || data.stepCount < 1) {
     throw new Error('stepCount must be a positive number');
   }
@@ -2050,6 +2212,7 @@ export function importEngineConfig(data) {
       id: `palette-${nextId++}`,
       name: sanitizePaletteName(typeof palette.name === 'string' ? palette.name : 'palette'),
       includeSteps: Array.isArray(palette.includeSteps) ? palette.includeSteps : null,
+      includeStepsDm: Array.isArray(palette.includeStepsDm) ? palette.includeStepsDm : null,
       colorOverride: parseColorOverrideConfig(palette.colorOverride, 'colorOverride'),
       colorOverrideDm: parseColorOverrideConfig(palette.colorOverrideDm, 'colorOverrideDm'),
       lm: {
@@ -2073,28 +2236,19 @@ export function importEngineConfig(data) {
   const steps = getSteps(state.stepCount);
   state.keyPalette.lm.states = normalizeStoredInteractionStates(
     /** @type {Partial<InteractionStatesConfig>} */ (state.keyPalette.lm.states),
-    steps,
   );
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
   for (const palette of state.customPalettes) {
     setIncludeStepsIntent(palette, palette.includeSteps, keyPalettes.lm, steps);
-    const published = resolveIncludeSteps(palette.includeSteps, steps);
-    if (published.length === 1) {
-      collapseParamsForSingleIncludeStep(palette, steps);
-    }
+    setIncludeStepsDmIntent(palette, palette.includeStepsDm, keyPalettes.dm, steps);
+    collapseParamsForSingleIncludeStep(palette, steps);
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
+      const published = resolvePublishedIncludeSteps(palette, mode, steps);
       clampChromaParamForConfig(palette[mode].chroma, palette[mode].hue, keyPalettes[mode], steps, published);
     }
   }
 
   state.brand = parseBrandConfig(data.brand, state.customPalettes);
-  // Legacy / brand modes that set hex lock → ensure colorOverride on brand palette.
-  if (state.brand && (state.brand.perfectFit || state.brand.overrideNearest)) {
-    const brandPalette = resolveBrandPalette(state);
-    if (brandPalette && !brandPalette.colorOverride) {
-      setColorOverride(brandPalette, state.brand.hex);
-    }
-  }
   syncColorOverridePoints(state, keyPalettes);
   return state;
 }
@@ -2206,7 +2360,7 @@ function appendGhostZeroStateTokens(steps, prefix, lines) {
  * @param {number} pivotTone
  */
 function appendBuildInteractionStateTokens(result, steps, prefix, lines, states, bgHex, pivotTone) {
-  const cfg = resolveInteractionStates(states, steps);
+  const cfg = resolveInteractionStates(states);
   for (const step of steps) {
     const data = result.steps[step];
     if (!data) continue;
@@ -2234,7 +2388,7 @@ function appendBuildInteractionStateTokens(result, steps, prefix, lines, states,
  * @param {number} pivotTone
  */
 function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bgHex, pivotTone) {
-  const cfg = resolveInteractionStates(states, steps);
+  const cfg = resolveInteractionStates(states);
   const bgTone = hexToHct(bgHex).tone;
   const prefix = mode === 'dm' ? 'state-dm' : 'state';
   for (const step of steps) {
@@ -2261,8 +2415,8 @@ function appendRuntimeStateDeltaTokens(keyResult, steps, mode, lines, states, bg
  */
 export function buildTokensCss(state, keyResults, customResults, steps, endStep) {
   const lines = [];
-  const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm', steps);
-  const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm', steps);
+  const lmStates = resolveModeInteractionStates(state.keyPalette, 'lm');
+  const dmStates = resolveModeInteractionStates(state.keyPalette, 'dm');
   const runtime = lmStates.delivery === 'runtime';
   const lmPivotTone = resolvePivotTone(lmStates.pivotTone);
   const dmPivotTone = resolvePivotTone(dmStates.pivotTone);
@@ -2315,20 +2469,22 @@ export function buildTokensCss(state, keyResults, customResults, steps, endStep)
     const results = customResults[palette.id];
     if (!results) continue;
 
-    const published = resolveIncludeSteps(palette.includeSteps, steps);
-    const includePoles = isFullIncludeSteps(palette.includeSteps, steps);
-    appendPaletteColorTokens(results.lm, published, endStep, name, lines, 'hc', includePoles);
-    if (includePoles) appendGhostZeroStateTokens(steps, name, lines);
+    const publishedLm = resolvePublishedIncludeSteps(palette, 'lm', steps);
+    const publishedDm = resolvePublishedIncludeSteps(palette, 'dm', steps);
+    const polesLm = isFullPublishedIncludeSteps(palette, 'lm', steps);
+    const polesDm = isFullPublishedIncludeSteps(palette, 'dm', steps);
+    appendPaletteColorTokens(results.lm, publishedLm, endStep, name, lines, 'hc', polesLm);
+    if (polesLm) appendGhostZeroStateTokens(steps, name, lines);
     if (!runtime) {
       appendBuildInteractionStateTokens(
-        results.lm, published, name, lines, lmStates, keyResults.lm.min, lmPivotTone,
+        results.lm, publishedLm, name, lines, lmStates, keyResults.lm.min, lmPivotTone,
       );
     }
-    appendPaletteColorTokens(results.dm, published, endStep, `${name}-dm`, lines, 'hc', includePoles);
-    if (includePoles) appendGhostZeroStateTokens(steps, `${name}-dm`, lines);
+    appendPaletteColorTokens(results.dm, publishedDm, endStep, `${name}-dm`, lines, 'hc', polesDm);
+    if (polesDm) appendGhostZeroStateTokens(steps, `${name}-dm`, lines);
     if (!runtime) {
       appendBuildInteractionStateTokens(
-        results.dm, published, `${name}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
+        results.dm, publishedDm, `${name}-dm`, lines, dmStates, keyResults.dm.min, dmPivotTone,
       );
     }
   }
@@ -2355,8 +2511,8 @@ export function generateSystem(state) {
   const endStep = getEndStep(state.stepCount);
   const keyPalettes = generateKeyPalettes(state.keyPalette, steps);
 
-  // Whitelist with colorOverride: keep offsets around override step (hex T).
-  syncIncludeStepsFromTones(state, keyPalettes.lm, steps, { requireColorOverride: true });
+  // Whitelist with colorOverride: keep offsets around that mode’s override step (hex T).
+  syncIncludeStepsFromTones(state, keyPalettes, steps, { requireColorOverride: true });
 
   applyRelativeCustomChroma(state.customPalettes, keyPalettes, steps);
   clampAllCustomChroma(state.customPalettes, keyPalettes, steps);
