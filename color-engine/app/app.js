@@ -8,10 +8,12 @@ import {
   peakChromaForSteps,
   clampChromaParamValues,
   applyRelativeChromaParam,
+  applyRelativeFixedChroma,
   chromaLimitAtStep,
   lockChromaPointRatio,
   clampChroma,
   isClampInterpolatedChroma,
+  isRelativeChroma,
   maxChromaForHueTone,
   hexToHct,
   hctToHex,
@@ -934,10 +936,27 @@ function syncChromaControls(palette, mode, keyResult, steps) {
       });
       return;
     }
-    syncChromaMaxMarker(
-      `${palette.id}:${mode}:fixed`,
-      peakChromaForSteps(palette[mode].hue, keyResult, steps),
-    );
+    const controlKey = `${palette.id}:${mode}:fixed`;
+    const peak = peakChromaForSteps(palette[mode].hue, keyResult, steps);
+    syncChromaMaxMarker(controlKey, peak);
+
+    const relativePct = isRelativeChroma(chroma);
+    const pct = relativePct
+      ? Math.round(Math.min(100, Math.max(0, (typeof chroma.ratio === 'number' && Number.isFinite(chroma.ratio)
+        ? chroma.ratio
+        : (peak > 0 ? chroma.value / peak : 0)) * 100)))
+      : null;
+
+    app.querySelectorAll(`input[data-chroma-control="${controlKey}"]`).forEach((el) => {
+      if (!(el instanceof HTMLInputElement)) return;
+      if (el.type === 'range') {
+        el.value = String(chroma.value);
+        const wrap = el.parentElement;
+        if (wrap) syncSliderVisuals(wrap, el);
+      } else if (pct != null) {
+        el.value = String(pct);
+      }
+    });
     return;
   }
 
@@ -946,12 +965,21 @@ function syncChromaControls(palette, mode, keyResult, steps) {
     const limit = chromaLimitAtStep(palette[mode].hue, keyResult, steps, point.step);
     syncChromaMaxMarker(controlKey, limit);
 
+    const relativePct = isRelativeChroma(chroma);
+    const pct = relativePct
+      ? Math.round(Math.min(100, Math.max(0, (typeof point.ratio === 'number' && Number.isFinite(point.ratio)
+        ? point.ratio
+        : (limit > 0 ? point.value / limit : 0)) * 100)))
+      : null;
+
     app.querySelectorAll(`input[data-chroma-control="${controlKey}"]`).forEach((el) => {
       if (!(el instanceof HTMLInputElement)) return;
-      el.value = String(point.value);
       if (el.type === 'range') {
+        el.value = String(point.value);
         const wrap = el.parentElement;
         if (wrap) syncSliderVisuals(wrap, el);
+      } else {
+        el.value = String(pct != null ? pct : point.value);
       }
     });
   });
@@ -2575,9 +2603,24 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     toggle.checked = param.mode === 'interpolate';
     toggle.addEventListener('change', () => {
       touch();
+      const keepRelative = chromaCtx && isRelativeChroma(param);
       if (toggle.checked) {
+        // Fixed → Interpolate: keep ratio so swatches stay visually the same.
         const val = param.mode === 'fixed' ? param.value : 0;
+        const ratio = param.mode === 'fixed' && typeof param.ratio === 'number' ? param.ratio : undefined;
         Object.assign(param, createInterpolateParam(10, val, endStep, val));
+        delete /** @type {Record<string, unknown>} */ (param).ratio;
+        delete /** @type {Record<string, unknown>} */ (param).gamutLimit;
+        if (keepRelative) {
+          param.relativeInterpolateChroma = true;
+          param.clampInterpolatedChroma = true;
+          if (typeof ratio === 'number') {
+            for (const pt of param.points) {
+              pt.ratio = ratio;
+              pt.value = val;
+            }
+          }
+        }
         if (chromaCtx) {
           const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
           applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
@@ -2589,16 +2632,29 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
           group.querySelector('.param-settings-toggle')?.setAttribute('aria-expanded', 'true');
         }
       } else {
+        // Interpolate → Fixed: Relative collapses many % → one; default 100% (peak).
         const val = param.mode === 'interpolate'
           ? param.points[0]?.value ?? 0
           : param.value;
-        Object.assign(param, createFixedParam(val));
+        Object.assign(param, createFixedParam(keepRelative ? 0 : val));
         delete /** @type {Record<string, unknown>} */ (param).points;
         delete /** @type {Record<string, unknown>} */ (param).interpolators;
         delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
+        delete /** @type {Record<string, unknown>} */ (param).gamutLimit;
+        if (keepRelative) {
+          param.relativeInterpolateChroma = true;
+          param.ratio = 1;
+        } else {
+          delete /** @type {Record<string, unknown>} */ (param).relativeInterpolateChroma;
+          delete /** @type {Record<string, unknown>} */ (param).ratio;
+        }
         if (chromaCtx) {
           const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
-          clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          if (keepRelative) {
+            applyRelativeFixedChroma(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          } else {
+            clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          }
         }
       }
       onUpdate();
@@ -2607,31 +2663,72 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     toggleRow.appendChild(document.createTextNode(' Interpolate'));
     header.appendChild(toggleRow);
 
-    if (chromaCtx && param.mode === 'interpolate') {
-      const clampRow = document.createElement('label');
-      clampRow.className = 'checkbox-row';
-      const clampToggle = document.createElement('input');
-      clampToggle.type = 'checkbox';
-      clampToggle.checked = isClampInterpolatedChroma(param);
-      clampToggle.addEventListener('change', () => {
+    if (chromaCtx) {
+      if (param.mode === 'interpolate') {
+        const clampRow = document.createElement('label');
+        clampRow.className = 'checkbox-row';
+        const clampToggle = document.createElement('input');
+        clampToggle.type = 'checkbox';
+        clampToggle.checked = isClampInterpolatedChroma(param);
+        clampToggle.addEventListener('change', () => {
+          touch();
+          if (clampToggle.checked) {
+            param.clampInterpolatedChroma = true;
+            const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
+            applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+            clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          } else {
+            delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
+            delete /** @type {Record<string, unknown>} */ (param).relativeInterpolateChroma;
+            for (const point of param.points) {
+              delete point.ratio;
+              delete point.gamutLimit;
+            }
+          }
+          onUpdate();
+        });
+        clampRow.appendChild(clampToggle);
+        clampRow.appendChild(document.createTextNode(' Clamp interpolated chroma'));
+        header.appendChild(clampRow);
+      }
+
+      const relativeRow = document.createElement('label');
+      relativeRow.className = 'checkbox-row';
+      const relativeToggle = document.createElement('input');
+      relativeToggle.type = 'checkbox';
+      relativeToggle.checked = isRelativeChroma(param);
+      relativeToggle.title = 'Chroma as % of gamut (implies clamp when interpolate). Number 0–100%; slider absolute C; marker = 100%.';
+      relativeToggle.addEventListener('change', () => {
         touch();
-        if (clampToggle.checked) {
-          param.clampInterpolatedChroma = true;
+        if (relativeToggle.checked) {
+          param.relativeInterpolateChroma = true;
           const { steps: liveSteps, keyResult } = getLiveKeyResult(chromaCtx.mode);
-          applyRelativeChromaParam(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
-          clampChromaParamValues(param, chromaCtx.palette[chromaCtx.mode].hue, keyResult, liveSteps);
+          const hue = chromaCtx.palette[chromaCtx.mode].hue;
+          if (param.mode === 'interpolate') {
+            param.clampInterpolatedChroma = true;
+            applyRelativeChromaParam(param, hue, keyResult, liveSteps);
+            clampChromaParamValues(param, hue, keyResult, liveSteps);
+          } else {
+            applyRelativeFixedChroma(param, hue, keyResult, liveSteps);
+          }
         } else {
-          delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
-          for (const point of param.points) {
-            delete point.ratio;
-            delete point.gamutLimit;
+          delete /** @type {Record<string, unknown>} */ (param).relativeInterpolateChroma;
+          if (param.mode === 'interpolate') {
+            delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
+            for (const point of param.points) {
+              delete point.ratio;
+              delete point.gamutLimit;
+            }
+          } else {
+            delete /** @type {Record<string, unknown>} */ (param).ratio;
+            delete /** @type {Record<string, unknown>} */ (param).gamutLimit;
           }
         }
         onUpdate();
       });
-      clampRow.appendChild(clampToggle);
-      clampRow.appendChild(document.createTextNode(' Clamp interpolated chroma'));
-      header.appendChild(clampRow);
+      relativeRow.appendChild(relativeToggle);
+      relativeRow.appendChild(document.createTextNode(' Relative'));
+      header.appendChild(relativeRow);
     }
   }
 
@@ -2727,10 +2824,15 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
     const fields = document.createElement('div');
     fields.className = 'interp-point-fields';
 
+    const usedByOthers = new Set(
+      param.points.filter((_, j) => j !== i).map((p) => p.step),
+    );
+    const stepChoices = steps.filter((s) => s === point.step || !usedByOthers.has(s));
+
     fields.appendChild(createStepSelect(
       'Step',
       point.step,
-      steps,
+      stepChoices,
       isEndpoint || isOverridePoint,
       (step) => {
         touch();
@@ -2761,6 +2863,7 @@ function createInterpControls(param, steps, endStep, prefix, max, onUpdate, name
         touch,
         isClampInterpolatedChroma(param),
         isOverridePoint,
+        isRelativeChroma(param),
       ));
     } else {
       fields.appendChild(createSliderControl('Value', point.value, 0, max, (v) => {
@@ -3678,6 +3781,8 @@ function createSliderTrack(wrap) {
  *   getMarkerMax?: () => number,
  *   markerKey?: string | null,
  *   disabled?: boolean,
+ *   numberAsPercent?: boolean,
+ *   onPercentCommit?: (pct: number) => number,
  * }} [options]
  */
 function createSliderControl(label, value, min, max, onChange, options = {}) {
@@ -3688,6 +3793,9 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   const transform = options.transform ?? ((v) => v);
   const getMarkerMax = options.getMarkerMax;
   const hardClamp = Boolean(options.hardClampToMarker && getMarkerMax);
+  const numberAsPercent = Boolean(options.numberAsPercent && getMarkerMax);
+  const onPercentCommit = options.onPercentCommit;
+  const getPercentDisplay = options.getPercentDisplay;
   const step = options.step ?? 1;
   const decimals = (() => {
     const s = String(step);
@@ -3713,6 +3821,20 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     return v;
   };
 
+  const cToPercent = (c) => {
+    const limit = getMarkerMax?.() ?? 0;
+    if (!(limit > 0)) return 0;
+    return Math.round(Math.min(100, Math.max(0, (Number(c) / limit) * 100)));
+  };
+
+  const percentToC = (pct) => {
+    const limit = getMarkerMax?.() ?? 0;
+    let p = Number(pct);
+    if (!Number.isFinite(p)) p = 0;
+    p = Math.min(100, Math.max(0, Math.round(p)));
+    return applyValue(Math.round((p / 100) * (limit > 0 ? limit : 0)));
+  };
+
   const lbl = document.createElement('label');
   lbl.textContent = label;
   group.appendChild(lbl);
@@ -3721,17 +3843,22 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
   row.className = 'slider-control-row';
 
   const numberInput = createUiNumberInput({
-    value,
-    min,
-    max,
-    step,
-    ariaLabel: `${label} value`,
+    value: numberAsPercent
+      ? (getPercentDisplay ? getPercentDisplay() : cToPercent(value))
+      : value,
+    min: numberAsPercent ? 0 : min,
+    max: numberAsPercent ? 100 : max,
+    step: numberAsPercent ? 1 : step,
+    ariaLabel: numberAsPercent ? `${label} percent` : `${label} value`,
     controlKey: options.controlKey ?? null,
   });
-  if (decimals > 0) {
+  if (decimals > 0 && !numberAsPercent) {
     numberInput.inputMode = 'decimal';
   }
   numberInput.disabled = disabled;
+  if (numberAsPercent) {
+    numberInput.title = '0–100% of gamut limit (marker)';
+  }
 
   const wrap = document.createElement('div');
   wrap.className = 'chroma-slider-wrap';
@@ -3741,6 +3868,7 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     wrap.appendChild(createChromaMaxMarker(options.markerKey));
   }
 
+  // Range stays absolute C (0…max) so the gamut marker position stays meaningful.
   const range = document.createElement('input');
   range.type = 'range';
   range.min = String(min);
@@ -3756,9 +3884,14 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     attachRangePointerCapture(range);
   }
 
-  const paint = (v) => {
-    numberInput.value = String(v);
-    range.value = String(v);
+  /** @param {number} absC Absolute chroma for the range thumb */
+  const paint = (absC) => {
+    numberInput.value = String(
+      numberAsPercent
+        ? (getPercentDisplay ? getPercentDisplay() : cToPercent(absC))
+        : absC,
+    );
+    range.value = String(absC);
     syncSliderVisuals(wrap, range);
     if (getMarkerMax && options.markerKey) {
       const marker = wrap.querySelector(`[data-chroma-max-marker="${options.markerKey}"]`);
@@ -3768,15 +3901,27 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
     }
   };
 
-  const commit = (raw) => {
+  const commitAbsolute = (raw) => {
     const v = applyValue(raw);
+    onChange(v, { fromPercent: false });
     paint(v);
-    onChange(v);
+  };
+
+  const commitPercent = (raw) => {
+    let p = Number(raw);
+    if (!Number.isFinite(p)) p = 0;
+    p = Math.min(100, Math.max(0, Math.round(p)));
+    const absC = onPercentCommit ? onPercentCommit(p) : percentToC(p);
+    onChange(absC, { fromPercent: true });
+    paint(absC);
   };
 
   if (!disabled) {
-    numberInput.addEventListener('change', () => commit(numberInput.value));
-    range.addEventListener('input', () => commit(range.value));
+    numberInput.addEventListener('change', () => {
+      if (numberAsPercent) commitPercent(numberInput.value);
+      else commitAbsolute(numberInput.value);
+    });
+    range.addEventListener('input', () => commitAbsolute(range.value));
   }
 
   row.appendChild(numberInput);
@@ -3800,8 +3945,8 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
 }
 
 /**
- * Fixed chroma: free 0–CHROMA_MAX; peak marker is informational (no hard clamp).
- * Keeps the requested value when hue changes shrink the peak, then restore it.
+ * Fixed chroma: free 0–CHROMA_MAX; peak marker is informational (no hard clamp) unless Relative.
+ * With Relative: ratio vs peak (marker = 100%); number 0–100%; slider absolute C.
  * @param {import('../src/color-engine.js').ParamConfig} param
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
@@ -3810,15 +3955,45 @@ function createSliderControl(label, value, min, max, onChange, options = {}) {
  */
 function createChromaFixedSlider(param, palette, mode, uiMax, onTouch = null) {
   const controlKey = `${palette.id}:${mode}:fixed`;
-  return createSliderControl('Value', param.value, 0, uiMax, (v) => {
+  const relativeOn = isRelativeChroma(param);
+  const peak = () => livePeakChromaForPalette(palette, mode);
+
+  if (relativeOn) {
+    const lim = peak();
+    lockChromaPointRatio(param, Math.min(param.value, lim), lim);
+  }
+
+  return createSliderControl('Value', param.value, 0, uiMax, (v, meta = {}) => {
     onTouch?.();
-    param.value = v;
+    if (relativeOn) {
+      if (!meta.fromPercent) {
+        lockChromaPointRatio(param, v, peak());
+      }
+    } else {
+      param.value = v;
+      delete param.ratio;
+      delete param.gamutLimit;
+    }
     scheduleRefreshPreviews();
   }, {
     controlKey,
     markerKey: controlKey,
-    getMarkerMax: () => livePeakChromaForPalette(palette, mode),
-    hardClampToMarker: false,
+    getMarkerMax: peak,
+    hardClampToMarker: relativeOn,
+    numberAsPercent: relativeOn,
+    getPercentDisplay: relativeOn
+      ? () => Math.round(Math.min(100, Math.max(0, (typeof param.ratio === 'number' ? param.ratio : 0) * 100)))
+      : undefined,
+    onPercentCommit: relativeOn
+      ? (pct) => {
+        const lim = peak();
+        const p = Math.min(100, Math.max(0, Math.round(Number(pct)) || 0));
+        param.ratio = p / 100;
+        param.value = Math.round(param.ratio * (lim > 0 ? lim : 0));
+        param.gamutLimit = lim > 0 ? lim : 0;
+        return param.value;
+      }
+      : undefined,
   });
 }
 
@@ -3853,6 +4028,7 @@ function createChromaSingleStepSlider(param, palette, mode, step, uiMax, onTouch
 /**
  * Interpolate chroma point: with clamp on, marker is hard ceiling + relative %;
  * with clamp off, absolute C may sit past the peak (like multi-step fixed).
+ * With relative interpolate, number input is 0–100% of the marker; slider stays absolute C.
  * @param {{ step: number, value: number, ratio?: number, gamutLimit?: number }} point
  * @param {ReturnType<typeof createCustomPalette>} palette
  * @param {'lm' | 'dm'} mode
@@ -3861,18 +4037,23 @@ function createChromaSingleStepSlider(param, palette, mode, step, uiMax, onTouch
  * @param {(() => void) | null} [onTouch]
  * @param {boolean} [clampOn=true]
  * @param {boolean} [disabled=false]
+ * @param {boolean} [relativeOn=false]
  */
-function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null, clampOn = true, disabled = false) {
+function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouch = null, clampOn = true, disabled = false, relativeOn = false) {
   const controlKey = `${palette.id}:${mode}:point:${pointIndex}`;
   const limit = liveChromaLimitAtStep(palette, mode, point.step);
   if (clampOn && !disabled) {
     lockChromaPointRatio(point, Math.min(point.value, limit), limit);
   }
 
-  return createSliderControl('Value', point.value, 0, uiMax, (v) => {
+  const usePercent = relativeOn && clampOn;
+
+  return createSliderControl('Value', point.value, 0, uiMax, (v, meta = {}) => {
     onTouch?.();
     if (clampOn) {
-      lockChromaPointRatio(point, v, liveChromaLimitAtStep(palette, mode, point.step));
+      if (!meta.fromPercent) {
+        lockChromaPointRatio(point, v, liveChromaLimitAtStep(palette, mode, point.step));
+      }
     } else {
       point.value = v;
       delete point.ratio;
@@ -3882,9 +4063,24 @@ function createChromaPointSlider(point, palette, mode, pointIndex, uiMax, onTouc
   }, {
     controlKey,
     markerKey: controlKey,
+    // Percent mode still needs live limit for C↔% commit; marker UI uses 100 inside createSliderControl.
     getMarkerMax: () => liveChromaLimitAtStep(palette, mode, point.step),
     hardClampToMarker: clampOn,
     disabled,
+    numberAsPercent: usePercent,
+    getPercentDisplay: usePercent
+      ? () => Math.round(Math.min(100, Math.max(0, (typeof point.ratio === 'number' ? point.ratio : 0) * 100)))
+      : undefined,
+    onPercentCommit: usePercent
+      ? (pct) => {
+        const lim = liveChromaLimitAtStep(palette, mode, point.step);
+        const p = Math.min(100, Math.max(0, Math.round(Number(pct)) || 0));
+        point.ratio = p / 100;
+        point.value = Math.round(point.ratio * (lim > 0 ? lim : 0));
+        point.gamutLimit = lim > 0 ? lim : 0;
+        return point.value;
+      }
+      : undefined,
   });
 }
 

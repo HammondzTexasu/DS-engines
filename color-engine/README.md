@@ -55,9 +55,11 @@ Odvozené palety dědí světlostní stupně z `key-palette` (resp. `key-palette
     * `[nazev]-chroma-interpolator`
     * Podpora vícebodové interpolace (např. suffix `-1`, `-2` pro případ interpolace mezi více body, např. 10–50–100, tedy interpolátor mezi 10–50 a druhý mezi 50–100). Kroky `min` a `max` se do interpolace H/C nepočítají.
 
-**Chroma (interpolate):** defaultně absolutní C u kontrolních bodů i mezikroků (může být nad gamutem; hex stejně projde HCT). Volitelně `clampInterpolatedChroma: true` — drží **relativní podíl** dostupného gamutu a clampuje body i mezikroky.
+**Chroma (interpolate):** defaultně absolutní C u kontrolních bodů i mezikroků (může být nad gamutem; hex stejně projde HCT). Volitelně `clampInterpolatedChroma: true` — drží **ratio** na bodech a clampuje. Volitelně `relativeInterpolateChroma: true` — mezikroky interpolují **ratio** (ne absolutní C), pak × limit kroku; implikuje clamp.
 
-**Fixed chroma:** požadovaná hodnota může zůstat i nad peakem gamutu; při vykreslení kroku se C stejně ořízne do HCT.
+**Chroma (fixed):** defaultně absolutní C (může sedět nad peakem; render clampuje per step). Volitelně stejný `relativeInterpolateChroma: true` — jeden **ratio**, `C = round(ratio × limit kroku)`; UI 100 % = peak marker.
+
+**GUI Relative:** společný toggle Fixed/Interpolate; number 0–100 %; slider absolutní C + marker.
 
 **Published steps (`includeSteps` / `includeStepsDm`):** whitelist kroků mřížky do CSS tokenů a GUI swatchů. Generování + sync s key zůstává na plné mřížce.
 * LM `includeSteps`: `null` / vynecháno / celá mřížka → publikuje se vše včetně `0` / `max` + ghost `--*-0-state1|2`

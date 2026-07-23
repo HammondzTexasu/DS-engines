@@ -18,10 +18,11 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * @typedef {{ step: number, value: number, ratio?: number, gamutLimit?: number }} ParamPoint
  */
 /**
- * Fixed param. For chroma with a single published step, `ratio` / `gamutLimit` mirror interpolate points (runtime).
- * @typedef {{ mode: 'fixed', value: number, ratio?: number, gamutLimit?: number }} FixedParam
+ * Fixed param. For chroma: optional `relativeInterpolateChroma` + `ratio` (same Relative toggle as interpolate).
+ * `gamutLimit` is runtime-only (peak or single-step limit) — not written to config JSON.
+ * @typedef {{ mode: 'fixed', value: number, ratio?: number, gamutLimit?: number, relativeInterpolateChroma?: boolean }} FixedParam
  */
-/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean }} InterpolateParam */
+/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean, relativeInterpolateChroma?: boolean }} InterpolateParam */
 /** @typedef {FixedParam | InterpolateParam} ParamConfig */
 /**
  * Interaction states for palette steps (not min/max).
@@ -479,6 +480,24 @@ export function collapseParamsForSingleIncludeStep(palette, gridSteps) {
 }
 
 /**
+ * Remap fixed chroma so `ratio` stays stable.
+ * Multi-step: ratio vs peak gamut (UI marker = 100%). Single-step callers pass that step via
+ * `applyRelativeFixedChromaAtStep`.
+ * Mutates the fixed param in place.
+ * @param {ParamConfig} chromaParam
+ * @param {ParamConfig} hueParam
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ */
+export function applyRelativeFixedChroma(chromaParam, hueParam, keyResult, steps) {
+  if (chromaParam.mode !== 'fixed') return;
+  if (!isRelativeChroma(chromaParam)) return;
+
+  const peak = peakChromaForSteps(hueParam, keyResult, steps);
+  lockFixedChromaRatioAgainstLimit(chromaParam, peak);
+}
+
+/**
  * Remap fixed chroma so `ratio` stays stable at one published step (same as interpolate points).
  * Mutates the fixed param in place.
  * @param {ParamConfig} chromaParam
@@ -491,7 +510,14 @@ export function applyRelativeFixedChromaAtStep(chromaParam, hueParam, keyResult,
   if (chromaParam.mode !== 'fixed') return;
 
   const limit = chromaLimitAtStep(hueParam, keyResult, steps, step);
+  lockFixedChromaRatioAgainstLimit(chromaParam, limit);
+}
 
+/**
+ * @param {Extract<ParamConfig, { mode: 'fixed' }>} chromaParam
+ * @param {number} limit
+ */
+function lockFixedChromaRatioAgainstLimit(chromaParam, limit) {
   if (typeof chromaParam.ratio !== 'number' || !Number.isFinite(chromaParam.ratio)) {
     chromaParam.ratio = chromaRatioFromValue(chromaParam.value, limit);
   } else if (
@@ -503,8 +529,8 @@ export function applyRelativeFixedChromaAtStep(chromaParam, hueParam, keyResult,
   }
 
   chromaParam.ratio = Math.min(1, Math.max(0, chromaParam.ratio));
-  chromaParam.value = Math.round(chromaParam.ratio * limit);
-  chromaParam.gamutLimit = limit;
+  chromaParam.value = Math.round(chromaParam.ratio * (limit > 0 ? limit : 0));
+  chromaParam.gamutLimit = limit > 0 ? limit : 0;
 }
 
 /**
@@ -964,6 +990,17 @@ function syncPaletteColorOverridePoints(palette, mode, keyResult, steps) {
     if (param.mode !== 'interpolate') continue;
     const value = paramName === 'hue' ? hct.hue : hct.chroma;
     placeOverrideInterpolatePoint(param, step, value, prev);
+    // Like a manual point: raw hex C unless Clamp/Relative (then lock ratio; Relative resolve needs it).
+    if (paramName === 'chroma' && isClampInterpolatedChroma(param)) {
+      const point = param.points.find((p) => p.step === step);
+      if (point) {
+        lockChromaPointRatio(
+          point,
+          value,
+          chromaLimitAtStep(palette[mode].hue, keyResult, steps, step),
+        );
+      }
+    }
   }
 
   palette[stepKey] = step;
@@ -1089,6 +1126,84 @@ export function resolveParam(config, step, steps, asHue = false) {
     : interpolateValue(p0.value, p1.value, t, bezier);
 }
 
+/**
+ * Interpolate a numeric field on interpolate points (same segment/t/bezier as `resolveParam`).
+ * @param {InterpolateParam} config
+ * @param {number} step
+ * @param {number[]} steps
+ * @param {(point: ParamPoint) => number} getValue
+ * @returns {number}
+ */
+function resolveInterpolatedScalar(config, step, steps, getValue) {
+  const points = [...config.points].sort((a, b) => a.step - b.step);
+  if (points.length === 0) return 0;
+  if (points.length === 1) return getValue(points[0]);
+
+  if (step <= points[0].step) return getValue(points[0]);
+  if (step >= points[points.length - 1].step) return getValue(points[points.length - 1]);
+
+  let segIdx = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    if (step >= points[i].step && step <= points[i + 1].step) {
+      segIdx = i;
+      break;
+    }
+  }
+
+  const p0 = points[segIdx];
+  const p1 = points[segIdx + 1];
+  const segSteps = steps.filter((s) => s >= p0.step && s <= p1.step);
+  const idx = segSteps.indexOf(step);
+  const t = segSteps.length <= 1 ? 0 : idx / (segSteps.length - 1);
+  const bezier = config.interpolators[segIdx] ?? [0, 0, 1, 1];
+  // Unrounded — ratios are 0–1; Math.round(0.5) === 1 would collapse mid-scale to 100%.
+  const eased = cubicBezierY(t, bezier);
+  return getValue(p0) + (getValue(p1) - getValue(p0)) * eased;
+}
+
+/**
+ * Effective chroma at a custom-palette step (absolute C).
+ * Relative (fixed or interpolate): uses stored `ratio` × HCT limit at this step.
+ * @param {ParamConfig} chromaParam
+ * @param {ParamConfig} hueParam
+ * @param {ReturnType<typeof generateKeyPalette>} keyResult
+ * @param {number[]} steps
+ * @param {number} step
+ * @returns {number}
+ */
+export function resolveChromaAtStep(chromaParam, hueParam, keyResult, steps, step) {
+  const hue = resolveParam(hueParam, step, steps, true);
+  const tone = keyResult.steps[step]?.tone;
+  if (tone === undefined) return 0;
+
+  if (chromaParam.mode === 'fixed') {
+    if (isRelativeChroma(chromaParam)) {
+      const ratio = typeof chromaParam.ratio === 'number' && Number.isFinite(chromaParam.ratio)
+        ? Math.min(1, Math.max(0, chromaParam.ratio))
+        : 0;
+      return Math.round(ratio * maxChromaForHueTone(hue, tone));
+    }
+    const requested = Math.round(chromaParam.value);
+    return isClampInterpolatedChroma(chromaParam)
+      ? clampChroma(requested, hue, tone)
+      : Math.max(0, requested || 0);
+  }
+
+  if (isRelativeChroma(chromaParam)) {
+    const ratio = Math.min(1, Math.max(0, resolveInterpolatedScalar(chromaParam, step, steps, (p) => {
+      if (typeof p.ratio === 'number' && Number.isFinite(p.ratio)) return p.ratio;
+      return 0;
+    })));
+    const limit = maxChromaForHueTone(hue, tone);
+    return Math.round(ratio * limit);
+  }
+
+  const requested = resolveParam(chromaParam, step, steps);
+  return isClampInterpolatedChroma(chromaParam)
+    ? clampChroma(requested, hue, tone)
+    : Math.max(0, Math.round(Number(requested)) || 0);
+}
+
 // ---------------------------------------------------------------------------
 // HCT & chroma
 // ---------------------------------------------------------------------------
@@ -1166,12 +1281,33 @@ export function clampChromaParamValues(chromaParam, hueParam, keyResult, steps) 
 
 /**
  * Whether interpolate chroma should clamp control points + generated steps (default false).
+ * Relative chroma implies clamp for interpolate.
  * @param {ParamConfig} chromaParam
  * @returns {boolean}
  */
 export function isClampInterpolatedChroma(chromaParam) {
   if (chromaParam.mode !== 'interpolate') return true;
+  if (isRelativeChroma(chromaParam)) return true;
   return chromaParam.clampInterpolatedChroma === true;
+}
+
+/**
+ * Relative chroma: store/use `ratio` (0–1 of gamut) instead of absolute C across steps.
+ * Same flag `relativeInterpolateChroma` for fixed and interpolate. Implies clamp when interpolate.
+ * @param {ParamConfig} chromaParam
+ * @returns {boolean}
+ */
+export function isRelativeChroma(chromaParam) {
+  return chromaParam.relativeInterpolateChroma === true;
+}
+
+/**
+ * @deprecated Prefer `isRelativeChroma` (same flag on fixed + interpolate).
+ * @param {ParamConfig} chromaParam
+ * @returns {boolean}
+ */
+export function isRelativeInterpolateChroma(chromaParam) {
+  return chromaParam.mode === 'interpolate' && isRelativeChroma(chromaParam);
 }
 
 /**
@@ -1531,16 +1667,19 @@ export function applyRelativeCustomChroma(customPalettes, keyResults, steps) {
     collapseParamsForSingleIncludeStep(palette, steps);
     for (const mode of /** @type {const} */ (['lm', 'dm'])) {
       const published = resolvePublishedIncludeSteps(palette, mode, steps);
+      const chroma = palette[mode].chroma;
       if (published.length === 1) {
         applyRelativeFixedChromaAtStep(
-          palette[mode].chroma,
+          chroma,
           palette[mode].hue,
           keyResults[mode],
           steps,
           published[0],
         );
+      } else if (chroma.mode === 'fixed' && isRelativeChroma(chroma)) {
+        applyRelativeFixedChroma(chroma, palette[mode].hue, keyResults[mode], steps);
       } else {
-        applyRelativeChromaParam(palette[mode].chroma, palette[mode].hue, keyResults[mode], steps);
+        applyRelativeChromaParam(chroma, palette[mode].hue, keyResults[mode], steps);
       }
     }
   }
@@ -1638,10 +1777,7 @@ export function generateCustomPaletteForMode(palette, mode, keyResult, steps) {
   for (const step of steps) {
     const tone = keyResult.steps[step].tone;
     const hue = resolveParam(cfg.hue, step, steps, true);
-    const requested = resolveParam(cfg.chroma, step, steps);
-    const chroma = isClampInterpolatedChroma(cfg.chroma)
-      ? clampChroma(requested, hue, tone)
-      : Math.max(0, Math.round(Number(requested)) || 0);
+    const chroma = resolveChromaAtStep(cfg.chroma, cfg.hue, keyResult, steps, step);
     stepColors[step] = { tone, hue, chroma, hex: hctToHex(hue, chroma, tone) };
   }
 
@@ -1953,6 +2089,9 @@ function parseParamConfig(value) {
     if (typeof value.ratio === 'number' && Number.isFinite(value.ratio)) {
       fixed.ratio = Math.min(1, Math.max(0, value.ratio));
     }
+    if (value.relativeInterpolateChroma === true) {
+      fixed.relativeInterpolateChroma = true;
+    }
     return fixed;
   }
 
@@ -1980,7 +2119,10 @@ function parseParamConfig(value) {
     const interpolators = value.interpolators.map((bezier, index) => parseBezier(bezier, `interpolator ${index + 1}`));
     /** @type {InterpolateParam} */
     const interpolated = { mode: 'interpolate', points, interpolators };
-    if (value.clampInterpolatedChroma === true) {
+    if (value.relativeInterpolateChroma === true) {
+      interpolated.relativeInterpolateChroma = true;
+      interpolated.clampInterpolatedChroma = true;
+    } else if (value.clampInterpolatedChroma === true) {
       interpolated.clampInterpolatedChroma = true;
     }
     return interpolated;
@@ -2075,14 +2217,22 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
       delete chromaParam.gamutLimit;
       return;
     }
+    if (isRelativeChroma(chromaParam)) {
+      applyRelativeFixedChroma(chromaParam, hueParam, keyResult, steps);
+      chromaParam.relativeInterpolateChroma = true;
+      delete chromaParam.gamutLimit;
+      return;
+    }
     const peak = peakChromaForSteps(hueParam, keyResult, steps);
     chromaParam.value = Math.min(Math.max(0, Math.round(Number(chromaParam.value)) || 0), peak);
     delete chromaParam.ratio;
     delete chromaParam.gamutLimit;
+    delete chromaParam.relativeInterpolateChroma;
     return;
   }
   if (!isClampInterpolatedChroma(chromaParam)) {
     delete chromaParam.clampInterpolatedChroma;
+    delete chromaParam.relativeInterpolateChroma;
     for (const point of chromaParam.points) {
       delete point.gamutLimit;
       delete point.ratio;
@@ -2092,6 +2242,11 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
   applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps);
   clampChromaParamValues(chromaParam, hueParam, keyResult, steps);
   chromaParam.clampInterpolatedChroma = true;
+  if (isRelativeChroma(chromaParam)) {
+    chromaParam.relativeInterpolateChroma = true;
+  } else {
+    delete chromaParam.relativeInterpolateChroma;
+  }
   for (const point of chromaParam.points) {
     delete point.gamutLimit;
   }

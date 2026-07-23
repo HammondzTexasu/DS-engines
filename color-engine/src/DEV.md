@@ -112,9 +112,10 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **`customPalettes[].colorOverride`** (volitelné) — `{ hex }`; sticky LM hex lock; step = nearest key T (neukládá se).
 * **`customPalettes[].colorOverrideDm`** (volitelné) — totéž pro DM; nezávislé na LM.
 * **ParamConfig**
-  * `{ "mode": "fixed", "value": number, "ratio"? }` — `ratio` u single-include-step chromy (a runtime u fixed)
-  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"? }`  
-    * `clampInterpolatedChroma` (jen chroma; default `false`) — `true` = relative/clamp bodů i mezikroků
+  * `{ "mode": "fixed", "value": number, "ratio"?, "relativeInterpolateChroma"? }` — Relative: `ratio` × limit kroku; UI 100 % = peak marker
+  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"?, "relativeInterpolateChroma"? }`  
+    * `clampInterpolatedChroma` (jen chroma; default `false`) — `true` = relative/clamp bodů i mezikroků (absolutní interpolace `value`)  
+    * `relativeInterpolateChroma` (jen chroma; Fixed i Interpolate; default `false`) — `true` = `ratio` (0–1) × limit kroku; u interpolate **implikuje clamp**
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
@@ -127,7 +128,7 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * Matika states vždy z HCT T; OKLCH/runtime jen aplikace Δ na L. `bg` **není** v configu — `bgHex` do API.
 * `colorAtInteractionState(color, bgHex, states, level, pivotTone)`
 
-**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo u 1 published kroku relative + `ratio`); interpolate s `clampInterpolatedChroma: true` → relative + clamp + flag v JSON; default (off) → absolutní C, flag vynechán; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `includeStepsDm` jen když je dirty; `states` + volitelný `brand` s key palette / brand.
+**Export** (`exportEngineConfig`): fixed chroma ořízne na peak (nebo Relative / 1 published krok → `ratio` + flag); interpolate s `clampInterpolatedChroma: true` → relative + clamp + flag v JSON; default (off) → absolutní C, flag vynechán; bez `gamutLimit`; `includeSteps` jen když není plná mřížka; `includeStepsDm` jen když je dirty; `states` + volitelný `brand` s key palette / brand.
 
 **Import** (`importEngineConfig`): validace → nové `id` palet → normalizace `includeSteps` / `includeStepsDm` → clamp/relative normalizace chroma; chybějící `states` → defaulty; orphan `brand.palette` → `brand: null`.
 
@@ -172,7 +173,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **HCT:** `hctToHex`, `hexToHct`, `clampChroma`, `maxChromaForHueTone`, `peakChromaForSteps`
 * **Interaction states:** `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`, `resolvePivotTone`, `applyInteractionTone`, `interactionStateDelta`, `roundStateDelta`  
   * Matika vždy HCT T (`T <= pivotTone` → zesvětlit); Δ na 1 desetinu; OKLCH/runtime jen aplikace. Uložené preference (space/relative/gamut) přežijí runtime.
-* **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `applyRelativeChromaParam`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
+* **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `isRelativeChroma`, `isRelativeInterpolateChroma`, `resolveChromaAtStep`, `applyRelativeChromaParam`, `applyRelativeFixedChroma`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
 * **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → shortest-arc přes `hueInterpDelta`), `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `resolvePublishedIncludeSteps`, `normalizeIncludeSteps`, `setIncludeStepsIntent`, `setIncludeStepsDmIntent`, `syncIncludeStepsFromTones`, `isFullIncludeSteps`, `isDirtyFullIncludeStepsDm`, `isFullPublishedIncludeSteps`, `isSinglePublishedIncludeStep`, `collapseParamsForSingleIncludeStep`
