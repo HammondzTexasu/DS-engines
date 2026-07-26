@@ -116,7 +116,8 @@ Zdroj pravdy pro uložení / sdílení nastavení.
   * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"?, "relativeInterpolateChroma"?, "hueArc"? }`  
     * `clampInterpolatedChroma` (jen chroma; default `false`) — `true` = relative/clamp bodů i mezikroků (absolutní interpolace `value`)  
     * `relativeInterpolateChroma` (jen chroma; Fixed i Interpolate; default `false`) — `true` = `ratio` (0–1) × limit kroku; u interpolate **implikuje clamp**
-    * `hueArc` (jen hue interpolate; default `shortest`) — `shortest` \| `longest` \| `increasing` \| `decreasing`
+    * `hueArc` (jen hue interpolate; default `shortest`) — `shortest` \| `longest` \| `linear` \| `increasing` \| `decreasing`  
+      (`linear` = raw stupně; `increasing`/`decreasing` = vždy ten směr na kruhu, bez speciálů)
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON

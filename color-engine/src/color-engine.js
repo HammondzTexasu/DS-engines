@@ -17,7 +17,7 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * `gamutLimit` is runtime-only (last limit used) — not written to config JSON.
  * @typedef {{ step: number, value: number, ratio?: number, gamutLimit?: number }} ParamPoint
  */
-/** Hue circle path when interpolating hue (`shortest` = default / omit). @typedef {'shortest' | 'longest' | 'increasing' | 'decreasing'} HueArc */
+/** Hue path when interpolating hue (`shortest` = default / omit). @typedef {'shortest' | 'longest' | 'linear' | 'increasing' | 'decreasing'} HueArc */
 /**
  * Fixed param. For chroma: optional `relativeInterpolateChroma` + `ratio` (same Relative toggle as interpolate).
  * `gamutLimit` is runtime-only (peak or single-step limit) — not written to config JSON.
@@ -611,26 +611,40 @@ function cubicBezierY(x, bezier) {
 }
 
 /**
- * Hue circle arc modes (interpolate hue only).
+ * Hue interpolate path modes.
  * @type {readonly HueArc[]}
  */
-export const HUE_ARC_MODES = Object.freeze(['shortest', 'longest', 'increasing', 'decreasing']);
+export const HUE_ARC_MODES = Object.freeze([
+  'shortest',
+  'longest',
+  'linear',
+  'increasing',
+  'decreasing',
+]);
 
 /**
  * @param {unknown} hueArc
  * @returns {HueArc}
  */
 export function resolveHueArc(hueArc) {
-  if (hueArc === 'longest' || hueArc === 'increasing' || hueArc === 'decreasing') return hueArc;
+  if (
+    hueArc === 'longest'
+    || hueArc === 'linear'
+    || hueArc === 'increasing'
+    || hueArc === 'decreasing'
+  ) {
+    return hueArc;
+  }
   return 'shortest';
 }
 
 /**
- * Signed Δ on the hue circle for one segment.
- * - `shortest` — (−180, 180] (default); 0≡360 → no move
- * - `longest` — the other way (0 if already equal)
- * - `increasing` — [0, 360]; raw ±360 (e.g. 0→360) keeps a full turn
- * - `decreasing` — [−360, 0]; raw ±360 keeps a full turn the other way
+ * Signed Δ for one hue segment.
+ * - `shortest` — circle (−180, 180]; 0≡360 → 0
+ * - `longest` — circle, the other way (0 if equal)
+ * - `linear` — raw degree delta (0→360 = +360; 356→359 = +3)
+ * - `increasing` — circle, always [0, 360)
+ * - `decreasing` — circle, always (−360, 0]
  * @param {number} from
  * @param {number} to
  * @param {HueArc} [hueArc='shortest']
@@ -639,31 +653,25 @@ export function resolveHueArc(hueArc) {
 export function hueInterpDelta(from, to, hueArc = 'shortest') {
   const rawFrom = Number(from);
   const rawTo = Number(to);
+  const mode = resolveHueArc(hueArc);
+
+  if (mode === 'linear') return rawTo - rawFrom;
+
   const a = ((rawFrom % 360) + 360) % 360;
   const b = ((rawTo % 360) + 360) % 360;
   const shortest = ((b - a) % 360 + 540) % 360 - 180;
-  const mode = resolveHueArc(hueArc);
 
   if (mode === 'shortest') return shortest;
   if (mode === 'longest') {
     if (shortest === 0) return 0;
     return shortest > 0 ? shortest - 360 : shortest + 360;
   }
-
-  // Directed modes: keep an explicit full turn only when raw Δ matches the mode
-  // (0→360 + increasing → +360; 360→0 + decreasing → −360).
-  // 0→360 + decreasing stays Δ 0 after wrap (same point on the circle).
-  const rawDelta = rawTo - rawFrom;
   if (mode === 'increasing') {
-    if (rawDelta >= 360 - 1e-9 && shortest === 0) return 360;
     return ((b - a) % 360 + 360) % 360;
   }
   // decreasing
-  if (rawDelta <= -360 + 1e-9 && shortest === 0) return -360;
-  {
-    const d = ((b - a) % 360 + 360) % 360;
-    return d === 0 ? 0 : d - 360;
-  }
+  const d = ((b - a) % 360 + 360) % 360;
+  return d === 0 ? 0 : d - 360;
 }
 
 /**
