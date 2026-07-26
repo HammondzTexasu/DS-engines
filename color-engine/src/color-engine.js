@@ -627,18 +627,20 @@ export function resolveHueArc(hueArc) {
 
 /**
  * Signed Δ on the hue circle for one segment.
- * - `shortest` — (−180, 180] (default)
+ * - `shortest` — (−180, 180] (default); 0≡360 → no move
  * - `longest` — the other way (0 if already equal)
- * - `increasing` — [0, 360)
- * - `decreasing` — (−360, 0]
+ * - `increasing` — [0, 360]; raw ±360 (e.g. 0→360) keeps a full turn
+ * - `decreasing` — [−360, 0]; raw ±360 keeps a full turn the other way
  * @param {number} from
  * @param {number} to
  * @param {HueArc} [hueArc='shortest']
  * @returns {number}
  */
 export function hueInterpDelta(from, to, hueArc = 'shortest') {
-  const a = ((Number(from) % 360) + 360) % 360;
-  const b = ((Number(to) % 360) + 360) % 360;
+  const rawFrom = Number(from);
+  const rawTo = Number(to);
+  const a = ((rawFrom % 360) + 360) % 360;
+  const b = ((rawTo % 360) + 360) % 360;
   const shortest = ((b - a) % 360 + 540) % 360 - 180;
   const mode = resolveHueArc(hueArc);
 
@@ -646,6 +648,13 @@ export function hueInterpDelta(from, to, hueArc = 'shortest') {
   if (mode === 'longest') {
     if (shortest === 0) return 0;
     return shortest > 0 ? shortest - 360 : shortest + 360;
+  }
+
+  // Directed modes: preserve an explicit full turn when endpoints match on the circle
+  // but differ by ±360 in stored degrees (0→360 rainbow).
+  const rawDelta = rawTo - rawFrom;
+  if (Math.abs(rawDelta) >= 360 - 1e-9 && shortest === 0) {
+    return mode === 'increasing' ? 360 : -360;
   }
   if (mode === 'increasing') {
     return ((b - a) % 360 + 360) % 360;
@@ -1141,10 +1150,14 @@ export function resolveParam(config, step, steps, asHue = false) {
 
   const points = [...config.points].sort((a, b) => a.step - b.step);
   if (points.length === 0) return 0;
-  if (points.length === 1) return Math.round(points[0].value);
 
-  if (step <= points[0].step) return Math.round(points[0].value);
-  if (step >= points[points.length - 1].step) return Math.round(points[points.length - 1].value);
+  const wrapHue = (h) => Math.round(((Number(h) % 360) + 360) % 360);
+  const atPoint = (p) => (asHue ? wrapHue(p.value) : Math.round(p.value));
+
+  if (points.length === 1) return atPoint(points[0]);
+
+  if (step <= points[0].step) return atPoint(points[0]);
+  if (step >= points[points.length - 1].step) return atPoint(points[points.length - 1]);
 
   let segIdx = 0;
   for (let i = 0; i < points.length - 1; i++) {
