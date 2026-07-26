@@ -113,9 +113,10 @@ Zdroj pravdy pro uložení / sdílení nastavení.
 * **`customPalettes[].colorOverrideDm`** (volitelné) — totéž pro DM; nezávislé na LM.
 * **ParamConfig**
   * `{ "mode": "fixed", "value": number, "ratio"?, "relativeInterpolateChroma"? }` — Relative: `ratio` × limit kroku; UI 100 % = peak marker
-  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"?, "relativeInterpolateChroma"? }`  
+  * `{ "mode": "interpolate", "points": [...], "interpolators": [...], "clampInterpolatedChroma"?, "relativeInterpolateChroma"?, "hueArc"? }`  
     * `clampInterpolatedChroma` (jen chroma; default `false`) — `true` = relative/clamp bodů i mezikroků (absolutní interpolace `value`)  
     * `relativeInterpolateChroma` (jen chroma; Fixed i Interpolate; default `false`) — `true` = `ratio` (0–1) × limit kroku; u interpolate **implikuje clamp**
+    * `hueArc` (jen hue interpolate; default `shortest`) — `shortest` \| `longest` \| `increasing` \| `decreasing`
 * **Interpolate point:** `{ "step", "value", "ratio"? }`  
   * `ratio` (0–1) = relativní chroma intent (exportováno u chroma při clamp on)  
   * `gamutLimit` = jen runtime, **nikdy** do JSON
@@ -174,7 +175,7 @@ Headless pipeline je typicky nepotřebuje; `app/` je používá.
 * **Interaction states:** `normalizeStoredInteractionStates`, `resolveInteractionStates`, `resolveInteractionDeltas`, `resolveModeInteractionStates`, `resolvePivotTone`, `applyInteractionTone`, `interactionStateDelta`, `roundStateDelta`  
   * Matika vždy HCT T (`T <= pivotTone` → zesvětlit); Δ na 1 desetinu; OKLCH/runtime jen aplikace. Uložené preference (space/relative/gamut) přežijí runtime.
 * **Chroma politika:** `chromaLimitAtStep`, `chromaRatioFromValue`, `lockChromaPointRatio`, `isClampInterpolatedChroma`, `isRelativeChroma`, `isRelativeInterpolateChroma`, `resolveChromaAtStep`, `applyRelativeChromaParam`, `applyRelativeFixedChroma`, `applyRelativeFixedChromaAtStep`, `applyRelativeCustomChroma`, `clampChromaParamValues`, `clampAllCustomChroma`
-* **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → shortest-arc přes `hueInterpDelta`), `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
+* **Interpolace / Bézier:** `interpolateValue`, `interpolateAcrossSteps`, `resolveParam` (hue: `asHue` → `hueInterpDelta` / `hueArc`), `resolveHueArc`, `HUE_ARC_MODES`, `invertBezier`, `formatBezierCss`, `parseBezierCss`, `roundBezier`
 * **Kroky:** `getSteps`, `getEndStep`
 * **Published steps:** `formatIncludeSteps`, `parseIncludeStepsInput`, `resolveIncludeSteps`, `resolvePublishedIncludeSteps`, `normalizeIncludeSteps`, `setIncludeStepsIntent`, `setIncludeStepsDmIntent`, `syncIncludeStepsFromTones`, `isFullIncludeSteps`, `isDirtyFullIncludeStepsDm`, `isFullPublishedIncludeSteps`, `isSinglePublishedIncludeStep`, `collapseParamsForSingleIncludeStep`
 * **Brand seed:** `parseBrandHex`, `nearestStepForTone`, `fitBezierForTone`, `applyBrandColor`, `clearBrandConfig`, `resolveBrandPalette`

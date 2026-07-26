@@ -15,6 +15,8 @@ import {
   isClampInterpolatedChroma,
   isRelativeChroma,
   maxChromaForHueTone,
+  HUE_ARC_MODES,
+  resolveHueArc,
   hexToHct,
   hctToHex,
   colorAtInteractionState,
@@ -2446,6 +2448,7 @@ function createModeParamGroup(palette, mode, keyResult, steps, endStep, safeName
       singlePublishedStep,
       onParamTouch,
       overrideStep,
+      paramName === 'hue',
     ));
   }
 
@@ -2579,8 +2582,9 @@ function createColorOverrideControls(palette, mode, keyResult, steps) {
  * @param {number | null} [singlePublishedStep]
  * @param {(() => void) | null} [onParamTouch]
  * @param {number | null} [overrideStep] — colorOverride / colorOverrideDm locked step (interpolate point read-only)
+ * @param {boolean} [isHue=false] — hue param: show hue-arc dropdown when interpolate
  */
-function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null, singlePublishedStep = null, onParamTouch = null, overrideStep = null) {
+function createParamSection(param, steps, endStep, label, interpolatorPrefix, max, onUpdate, nameSuffix, chromaCtx = null, singlePublishedStep = null, onParamTouch = null, overrideStep = null, isHue = false) {
   const section = document.createElement('div');
   section.className = 'param-section';
 
@@ -2611,6 +2615,7 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
         Object.assign(param, createInterpolateParam(10, val, endStep, val));
         delete /** @type {Record<string, unknown>} */ (param).ratio;
         delete /** @type {Record<string, unknown>} */ (param).gamutLimit;
+        delete /** @type {Record<string, unknown>} */ (param).hueArc;
         if (keepRelative) {
           param.relativeInterpolateChroma = true;
           param.clampInterpolatedChroma = true;
@@ -2641,6 +2646,7 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
         delete /** @type {Record<string, unknown>} */ (param).interpolators;
         delete /** @type {Record<string, unknown>} */ (param).clampInterpolatedChroma;
         delete /** @type {Record<string, unknown>} */ (param).gamutLimit;
+        delete /** @type {Record<string, unknown>} */ (param).hueArc;
         if (keepRelative) {
           param.relativeInterpolateChroma = true;
           param.ratio = 1;
@@ -2661,6 +2667,39 @@ function createParamSection(param, steps, endStep, label, interpolatorPrefix, ma
     });
     toggleRow.appendChild(toggle);
     toggleRow.appendChild(document.createTextNode(' Interpolate'));
+
+    if (isHue && param.mode === 'interpolate') {
+      toggleRow.classList.add('checkbox-row--with-hue-arc');
+      const arcSelect = document.createElement('select');
+      arcSelect.className = 'ui-control ui-control--select ui-control--select-hue-arc';
+      arcSelect.setAttribute('aria-label', 'Hue arc');
+      arcSelect.title = 'How hue travels on the colour circle between interpolate points.';
+      const currentArc = resolveHueArc(/** @type {{ hueArc?: unknown }} */ (param).hueArc);
+      let longest = '';
+      for (const mode of HUE_ARC_MODES) {
+        const opt = document.createElement('option');
+        opt.value = mode;
+        opt.textContent = mode;
+        if (mode === currentArc) opt.selected = true;
+        if (mode.length > longest.length) longest = mode;
+        arcSelect.appendChild(opt);
+      }
+      const arcWidth = `calc(${longest.length}ch + 2 * var(--ui-control-px) + 22px)`;
+      arcSelect.style.width = arcWidth;
+      toggleRow.style.setProperty('--hue-arc-w', arcWidth);
+      arcSelect.addEventListener('change', () => {
+        touch();
+        const next = resolveHueArc(arcSelect.value);
+        if (next === 'shortest') {
+          delete /** @type {Record<string, unknown>} */ (param).hueArc;
+        } else {
+          /** @type {Record<string, unknown>} */ (param).hueArc = next;
+        }
+        onUpdate();
+      });
+      toggleRow.appendChild(arcSelect);
+    }
+
     header.appendChild(toggleRow);
 
     if (chromaCtx) {

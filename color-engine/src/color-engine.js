@@ -17,12 +17,13 @@ import { hexToOklch, oklchAtLightness } from '../lib/oklch-relative-chroma.mjs';
  * `gamutLimit` is runtime-only (last limit used) — not written to config JSON.
  * @typedef {{ step: number, value: number, ratio?: number, gamutLimit?: number }} ParamPoint
  */
+/** Hue circle path when interpolating hue (`shortest` = default / omit). @typedef {'shortest' | 'longest' | 'increasing' | 'decreasing'} HueArc */
 /**
  * Fixed param. For chroma: optional `relativeInterpolateChroma` + `ratio` (same Relative toggle as interpolate).
  * `gamutLimit` is runtime-only (peak or single-step limit) — not written to config JSON.
  * @typedef {{ mode: 'fixed', value: number, ratio?: number, gamutLimit?: number, relativeInterpolateChroma?: boolean }} FixedParam
  */
-/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean, relativeInterpolateChroma?: boolean }} InterpolateParam */
+/** @typedef {{ mode: 'interpolate', points: ParamPoint[], interpolators: Bezier[], clampInterpolatedChroma?: boolean, relativeInterpolateChroma?: boolean, hueArc?: HueArc }} InterpolateParam */
 /** @typedef {FixedParam | InterpolateParam} ParamConfig */
 /**
  * Interaction states for palette steps (not min/max).
@@ -610,13 +611,50 @@ function cubicBezierY(x, bezier) {
 }
 
 /**
- * Shortest signed Δ on the hue circle (−180, 180]. Tune hue path here.
+ * Hue circle arc modes (interpolate hue only).
+ * @type {readonly HueArc[]}
+ */
+export const HUE_ARC_MODES = Object.freeze(['shortest', 'longest', 'increasing', 'decreasing']);
+
+/**
+ * @param {unknown} hueArc
+ * @returns {HueArc}
+ */
+export function resolveHueArc(hueArc) {
+  if (hueArc === 'longest' || hueArc === 'increasing' || hueArc === 'decreasing') return hueArc;
+  return 'shortest';
+}
+
+/**
+ * Signed Δ on the hue circle for one segment.
+ * - `shortest` — (−180, 180] (default)
+ * - `longest` — the other way (0 if already equal)
+ * - `increasing` — [0, 360)
+ * - `decreasing` — (−360, 0]
  * @param {number} from
  * @param {number} to
+ * @param {HueArc} [hueArc='shortest']
  * @returns {number}
  */
-export function hueInterpDelta(from, to) {
-  return ((Number(to) - Number(from)) % 360 + 540) % 360 - 180;
+export function hueInterpDelta(from, to, hueArc = 'shortest') {
+  const a = ((Number(from) % 360) + 360) % 360;
+  const b = ((Number(to) % 360) + 360) % 360;
+  const shortest = ((b - a) % 360 + 540) % 360 - 180;
+  const mode = resolveHueArc(hueArc);
+
+  if (mode === 'shortest') return shortest;
+  if (mode === 'longest') {
+    if (shortest === 0) return 0;
+    return shortest > 0 ? shortest - 360 : shortest + 360;
+  }
+  if (mode === 'increasing') {
+    return ((b - a) % 360 + 360) % 360;
+  }
+  // decreasing
+  {
+    const d = ((b - a) % 360 + 360) % 360;
+    return d === 0 ? 0 : d - 360;
+  }
 }
 
 /**
@@ -632,16 +670,17 @@ export function interpolateValue(startVal, endVal, t, bezier) {
 }
 
 /**
- * Hue segment: same easing as `interpolateValue`, shortest-arc direction.
+ * Hue segment: same easing as `interpolateValue`; arc from `hueArc`.
  * @param {number} startVal
  * @param {number} endVal
  * @param {number} t
  * @param {Bezier} bezier
+ * @param {HueArc} [hueArc='shortest']
  * @returns {number}
  */
-function interpolateHue(startVal, endVal, t, bezier) {
+function interpolateHue(startVal, endVal, t, bezier, hueArc = 'shortest') {
   const eased = cubicBezierY(t, bezier);
-  const h = startVal + hueInterpDelta(startVal, endVal) * eased;
+  const h = startVal + hueInterpDelta(startVal, endVal, hueArc) * eased;
   return Math.round(((h % 360) + 360) % 360);
 }
 
@@ -1092,7 +1131,7 @@ export function applyColorOverrides(state, keyResults, customResults) {
  * @param {ParamConfig} config
  * @param {number} step
  * @param {number[]} steps
- * @param {boolean} [asHue] — shortest-arc interpolate (hue only)
+ * @param {boolean} [asHue] — hue circle interpolate (uses `hueArc` when interpolate)
  * @returns {number}
  */
 export function resolveParam(config, step, steps, asHue = false) {
@@ -1122,7 +1161,7 @@ export function resolveParam(config, step, steps, asHue = false) {
   const t = segSteps.length <= 1 ? 0 : idx / (segSteps.length - 1);
   const bezier = config.interpolators[segIdx] ?? [0, 0, 1, 1];
   return asHue
-    ? interpolateHue(p0.value, p1.value, t, bezier)
+    ? interpolateHue(p0.value, p1.value, t, bezier, resolveHueArc(config.hueArc))
     : interpolateValue(p0.value, p1.value, t, bezier);
 }
 
@@ -2125,6 +2164,10 @@ function parseParamConfig(value) {
     } else if (value.clampInterpolatedChroma === true) {
       interpolated.clampInterpolatedChroma = true;
     }
+    const hueArc = resolveHueArc(/** @type {{ hueArc?: unknown }} */ (value).hueArc);
+    if (hueArc !== 'shortest') {
+      interpolated.hueArc = hueArc;
+    }
     return interpolated;
   }
 
@@ -2233,6 +2276,7 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
   if (!isClampInterpolatedChroma(chromaParam)) {
     delete chromaParam.clampInterpolatedChroma;
     delete chromaParam.relativeInterpolateChroma;
+    delete /** @type {Record<string, unknown>} */ (chromaParam).hueArc;
     for (const point of chromaParam.points) {
       delete point.gamutLimit;
       delete point.ratio;
@@ -2242,6 +2286,7 @@ function clampChromaParamForConfig(chromaParam, hueParam, keyResult, steps, publ
   applyRelativeChromaParam(chromaParam, hueParam, keyResult, steps);
   clampChromaParamValues(chromaParam, hueParam, keyResult, steps);
   chromaParam.clampInterpolatedChroma = true;
+  delete /** @type {Record<string, unknown>} */ (chromaParam).hueArc;
   if (isRelativeChroma(chromaParam)) {
     chromaParam.relativeInterpolateChroma = true;
   } else {

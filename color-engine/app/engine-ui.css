@@ -427,6 +427,25 @@ button.ui-ghost.collapse-panel-toggle {
   background-image: var(--ui-select-arrow-disabled);
 }
 
+.checkbox-row .ui-control--select-hue-arc {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  flex: none;
+  width: auto;
+  height: var(--ui-control-h);
+  min-height: var(--ui-control-h);
+  max-height: var(--ui-control-h);
+  margin: 0;
+  z-index: 1;
+}
+
+.checkbox-row--with-hue-arc {
+  position: relative;
+  padding-right: calc(var(--hue-arc-w, 9.5rem) + 6px);
+}
+
 .ui-control--multiline {
   width: 100%;
   height: auto;

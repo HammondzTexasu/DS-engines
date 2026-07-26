@@ -17,7 +17,7 @@ Vývojářské detaily (API, soubory, headless použití): viz [`src/DEV.md`](./
 * **Mimo paletu:** Kroky `0` (`min`) a `end + 10` (`max`) **nepatří do palety**. Jsou to hardcoded primitives — extrémní barvy mimo interpolovaný rozsah (typicky pozadí a nejkontrastnější popředí). V DM variantě jsou role `min` a `max` **opačné** než v LM (světlá/tmavá extréma se prohodí).
 
 ## 2. Logika interpolace
-Interpolace mezi klíčovými body (`start`, `end`, případně mezikroky) probíhá pomocí kubických Bézierových křivek. Stejný princip platí pro Tone (T), Hue (H) i Chroma (C).
+Interpolace mezi klíčovými body (`start`, `end`, případně mezikroky) probíhá pomocí kubických Bézierových křivek. Stejný princip platí pro Tone (T), Hue (H) i Chroma (C). Hue interpolate volitelně `hueArc`: `shortest` (default) \| `longest` \| `increasing` \| `decreasing`.
 
 **Key-palette — interpolace Tone:**
 
