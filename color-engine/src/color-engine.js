@@ -650,16 +650,16 @@ export function hueInterpDelta(from, to, hueArc = 'shortest') {
     return shortest > 0 ? shortest - 360 : shortest + 360;
   }
 
-  // Directed modes: preserve an explicit full turn when endpoints match on the circle
-  // but differ by ±360 in stored degrees (0→360 rainbow).
+  // Directed modes: keep an explicit full turn only when raw Δ matches the mode
+  // (0→360 + increasing → +360; 360→0 + decreasing → −360).
+  // 0→360 + decreasing stays Δ 0 after wrap (same point on the circle).
   const rawDelta = rawTo - rawFrom;
-  if (Math.abs(rawDelta) >= 360 - 1e-9 && shortest === 0) {
-    return mode === 'increasing' ? 360 : -360;
-  }
   if (mode === 'increasing') {
+    if (rawDelta >= 360 - 1e-9 && shortest === 0) return 360;
     return ((b - a) % 360 + 360) % 360;
   }
   // decreasing
+  if (rawDelta <= -360 + 1e-9 && shortest === 0) return -360;
   {
     const d = ((b - a) % 360 + 360) % 360;
     return d === 0 ? 0 : d - 360;
