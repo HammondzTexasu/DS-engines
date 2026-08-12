@@ -6,7 +6,8 @@ Engine prozatím **generuje config a CSS tokeny** (CSS = jen barvy). Jak je proj
 
 **Konfigurace:** výchozí hodnoty žijí v enginu (`createDefaultState`). Projektový soubor [`config/engine-config.json`](./config/engine-config.json) má prioritu — playground ho při startu načte; když chybí nebo selže, použije se engine default. GUI Import přepíše jen aktuální session.
 
-Vývojářské detaily (API, soubory, headless použití): viz [`src/DEV.md`](./src/DEV.md).
+Vývojářské detaily (API, soubory, headless použití, caveats při agresivních změnách configu): viz [`src/DEV.md`](./src/DEV.md) (§11).  
+AI workflow (config → generate → tokeny, boundaries, sharp edges): viz [`AGENTS.md`](./AGENTS.md).
 
 ## 1. Architektonické principy
 * **Technologie:** Vanilla HTML, CSS, JS (pokud možno žádné frameworky).

@@ -253,7 +253,67 @@ U kroků palety jsou v komentáři T (key) nebo H/C (custom).
 
 ```text
 README.md (spec)     →  co systém znamená a co se ovládá
+AGENTS.md            →  AI workflow + krátké sharp edges
 src/color-engine.js  →  jak se to počítá
-src/DEV.md           →  jak to volat z kódu
+src/DEV.md           →  jak to volat z kódu + caveats (§11)
 app/*                →  jak to ovládat v browseru (nad enginem)
 ```
+
+---
+
+## 11. Caveats (sharp edges) — lidský výklad
+
+Jsou to **hrany při manipulaci se stavem**, ne „po uložení se barvy rozjedou“.
+
+**Roundtrip:** `generate → export → import → generate` při stejném configu dává **stejné CSS tokeny i vizuál**. Config je zdroj pravdy; export už nese normalizovaný intent.
+
+Caveaty bolí u **agresivních transformací** (hodně kroků → málo, zúžení na 1 published krok, orphan brand, …). Engine rozhodne deterministicky (stejný vstup → stejný výstup), ale výsledek nemusí být intuitivní vůči designérskému „chtěl jsem zachovat dojem škály“. Pro AI actionable shrnutí: [`../AGENTS.md`](../AGENTS.md) §8.
+
+### 11.1 `generateSystem` mutuje vstup
+
+Volání přepíše i `state` (relative chroma body, override sync, případný collapse H/C).  
+Po generate persistuj **`config` z návratové hodnoty**, ne „starý“ JSON z před generate.
+
+### 11.2 Jeden published krok → nevratný collapse
+
+Když mód publikuje přesně **1 krok** (nebo `stepCount === 1`), interpolate H/C se **collapsuje** na Fixed + relative chroma. Předchozí křivka se **neukládá stranou** — není Undo.  
+Chceš znovu interpolate → znovu nastav body / rozšiř `includeSteps`.
+
+### 11.3 Duplicate `name` → CSS last-wins
+
+Tokeny se jmenují podle `name`. Dvě palety se stejným `name` → v CSS vyhraje pozdější, **bez warningu**. Runtime `id` (`palette-1`) CSS nechrání.
+
+### 11.4 Brand seed-only drift
+
+Brand jen jako seed (`hex` + paleta) **bez** Perfect fit / Override nearest / `colorOverride`: ruční drift H/C v GUI **odlinkuje** brand.  
+S PF/OV nebo sticky override brand drží (viz README). Seed-only = měkká poznámka „odkud jsme vyšli“.
+
+### 11.5 Import brandu znovu neohýbá křivku
+
+`brand` v JSON po importu obnoví **metadata**; **neznovu** spouští Perfect fit wizard. Výsledná křivka + `colorOverride` už mají být v exportu.  
+Znovu seednout → `applyBrandColor`, ne jen import.
+
+### 11.6 Orphan brand
+
+`brand.palette` ukazuje na neexistující custom paletu → import nastaví `brand: null`. Nejdřív paleta, pak brand.
+
+### 11.7 Dirty DM whitelist bez DM override
+
+LM `includeSteps` s `colorOverride` se při změně key tonů remapuje (offsety kolem locku).  
+Dirty `includeStepsDm` **bez** `colorOverrideDm` se při běžném `generateSystem` (`requireColorOverride`) **nepřemapuje** stejně. Po změně key zkontroluj DM whitelist, nebo používej inherit / DM override.
+
+### 11.8 Relative OFF a Clamp (GUI)
+
+V playgroundu Relative ON u interpolate **implikuje** clamp; Relative OFF typicky shodí clamp intent (návrat k absolutnímu C). V JSON jsou flagy oddělené, produktově relative ≈ „držím % gamutu“.
+
+### 11.9 `gamutLimit` není v JSON
+
+Peak C na kroku je runtime cache. Po importu se dopočítá. Stabilní intent = `ratio` (relative) nebo `value`, ne uložený limit.
+
+### 11.10 Po změně `stepCount` nestačí jen generate
+
+Volej `normalizeStateForStepCount(state)` **po** nastavení `stepCount`, **před** `generateSystem` / render — jinak body a whitelist můžou sedět na starých step id.
+
+### 11.11 Žádné automatické testy (1.0)
+
+Tyto hrany CI nehlídá. Spoleh: docs + manuální / AI checklist po agresivních změnách.
