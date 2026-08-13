@@ -1,0 +1,30 @@
+{
+  "fontFamily": "Inter",
+  "styleCount": 9,
+  "baseStyle": "body-main",
+  "baseSizePx": 16,
+  "sizeScale": 1.25,
+  "weightRegular": 400,
+  "weightBold": 700,
+  "letterSpacing": {
+    "start": 0.02,
+    "end": -0.02,
+    "interpolator": [0, 0, 1, 1]
+  },
+  "lineHeight": {
+    "start": 1.6,
+    "end": 1.15,
+    "interpolator": [0, 0, 1, 1]
+  },
+  "styles": [
+    { "name": "tiny" },
+    { "name": "caption" },
+    { "name": "body-main" },
+    { "name": "body-lead" },
+    { "name": "heading-minor" },
+    { "name": "heading-secondary" },
+    { "name": "heading-primary" },
+    { "name": "heading-major" },
+    { "name": "display" }
+  ]
+}

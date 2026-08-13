@@ -68,6 +68,17 @@ header h1 {
   color: var(--ui-fg);
 }
 
+.app-title-back {
+  margin-right: 0.35em;
+  color: var(--ui-accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.app-title-back:hover {
+  text-decoration: none;
+}
+
 fieldset {
   border: 1px solid var(--ui-border);
   border-radius: 4px;

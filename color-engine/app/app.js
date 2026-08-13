@@ -810,7 +810,12 @@ function render() {
   const header = document.createElement('header');
 
   const title = document.createElement('h1');
-  title.textContent = 'Color Engine';
+  const back = document.createElement('a');
+  back.className = 'app-title-back';
+  back.href = '../../index.html';
+  back.setAttribute('aria-label', 'Back to DS Engines');
+  back.textContent = '←';
+  title.append(back, document.createTextNode('Color Engine'));
   header.appendChild(title);
   app.appendChild(header);
 

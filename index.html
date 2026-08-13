@@ -2,10 +2,55 @@
 <html lang="cs">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="refresh" content="0; url=color-engine/app/" />
-    <title>Design System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DS Engines</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        padding: 48px 24px;
+        background: #fafafa;
+        color: #222;
+      }
+      main {
+        max-width: 420px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin: 0 0 24px;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 10px;
+      }
+      a {
+        display: block;
+        padding: 14px 16px;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        background: #fff;
+        color: #0066cc;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      a:hover {
+        border-color: #0066cc;
+        background: #f5f9ff;
+      }
+    </style>
   </head>
   <body>
-    <p><a href="color-engine/app/">Color Engine</a></p>
+    <main>
+      <h1>DS Engines</h1>
+      <ul>
+        <li><a href="color-engine/app/">Color Engine</a></li>
+        <li><a href="typo-engine/app/">Typo Engine</a></li>
+      </ul>
+    </main>
   </body>
 </html>
