@@ -16,6 +16,16 @@
     "end": 1.15,
     "interpolator": [0, 0, 1, 1]
   },
+  "icons": {
+    "source": "font",
+    "style": "outlined",
+    "sizeCount": 3,
+    "sizes": [
+      { "fontSizePx": 20, "weight": 400 },
+      { "fontSizePx": 24, "weight": 400 },
+      { "fontSizePx": 40, "weight": 400 }
+    ]
+  },
   "styles": [
     { "name": "tiny" },
     { "name": "caption" },

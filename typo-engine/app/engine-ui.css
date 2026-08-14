@@ -927,6 +927,55 @@ button.ui-btn.easing-editor-close {
   color: #000000;
 }
 
+.icon-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: start;
+}
+
+.icon-preview-cell {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.icon-preview-mark {
+  display: grid;
+  color: #000000;
+  line-height: 0;
+}
+
+.icon-preview-svg {
+  display: block;
+  fill: currentColor;
+}
+
+.icon-preview-missing {
+  color: var(--ui-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.icon-preview-glyph {
+  font-size: 48px;
+  font-weight: 400;
+  font-style: normal;
+  font-optical-sizing: auto;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  color: #000000;
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
 .collapse-panel {
   margin: 0;
   margin-top: var(--stack-gap, 16px);

@@ -3,7 +3,7 @@
 > **Pro AI agenty (Cursor, Claude, Codex, …).**  
 > Lidská specifikace: [`README.md`](./README.md).  
 > Maintainer / API detaily: [`src/DEV.md`](./src/DEV.md).  
-> Release: **1.0** — engine je stabilní; defaultně **neměň** runtime kód.  
+> Release: **1.0** — engine je stabilní; defaultně **neměň** runtime kód (ikony, `googleFontsUrl` / `googleFontsUrlStatic` i type scale jsou v tomto surface).  
 > **Nesahej na `color-engine/`** při práci na typo (a naopak) — sdílí se jen produktové principy, ne kód ani CSS.
 
 ---
@@ -101,12 +101,14 @@ const state = importEngineConfig(configJson);
 // Pozn.: import i generate volají normalize sami — explicitní volání je hlavně
 // když měníš count na už načteném state bez re-importu.
 
-const { tokensCss, config, googleFontsUrl } = generateSystem(state);
+const { tokensCss, config, googleFontsUrl, googleFontsUrlStatic, iconFontsUrl } = generateSystem(state);
 
 // Zapiš OBOJÍ:
 // 1) config       → engine-config.json  (použij `config` z výsledku)
 // 2) tokensCss    → výstupní .css
-// Volitelně: googleFontsUrl → <link> / @import ve spotřebitelské appce
+// Volitelně: googleFontsUrl → <link> (variable osa 100..900, mezikroky jako 550)
+//            když CSS **error** (static rodina, ne timeout) → googleFontsUrlStatic
+// Volitelně: iconFontsUrl   → <link> Material Symbols (null když icons.source = svg)
 ```
 
 **Důležité:**
@@ -118,7 +120,7 @@ const { tokensCss, config, googleFontsUrl } = generateSystem(state);
 ### Krok D — Verifikace (checklist)
 
 - [ ] Config je validní JSON a projde `importEngineConfig` bez pádu.
-- [ ] CSS je `:root` blok s prefixem `--typo-…` a očekávanými styly (`tiny` … / custom `name`).
+- [ ] CSS je `:root` blok s prefixem `--typo-…`, `--typo-icon-source` / `--typo-icon-style`, a očekávanými styly (`tiny` … / custom `name`).
 - [ ] Každý styl má **`-regular`** i **`-bold`** sadu metrík.
 - [ ] Požadovaný font / škála / LS / LH / override je vidět v CSS nebo v configu dle intentu.
 - [ ] Nezměnil jsi `src/typo-engine.js` / `app/*` (pokud to nebylo explicitní).
@@ -155,7 +157,8 @@ Agent ve spotřebitelském projektu:
 1. Edituje **jen** typo config JSON (+ případně mapování tokenů mimo engine).
 2. Spustí generate proti **sdílenému** enginu.
 3. Přepíše `typo.css` (nebo dohodnutý soubor).
-4. Napojí `googleFontsUrl` (nebo self-host font) mimo engine — engine jen URL navrhne.
+4. Napojí `googleFontsUrl` (variable osa). Když stylesheet **error** (static rodina; ne timeout) → `googleFontsUrlStatic`. Self-host mimo engine.
+5. Při `icons.source === 'font'` napojí `iconFontsUrl` (Material Symbols). Glyph set řeší spotřebitel.
 
 Pokud engine v consumer projektu chybí, **nejdřív** vyjasni s uživatelem, odkud se importuje — nevymýšlej fork enginu.
 
@@ -168,6 +171,10 @@ Pokud engine v consumer projektu chybí, **nejdřív** vyjasni s uživatelem, od
 | Požadavek | Kde v configu | Poznámka |
 | :--- | :--- | :--- |
 | Font family | `fontFamily` | Google / systém; tokeny + `googleFontsUrl` |
+| Ikony — zdroj | `icons.source` | `font` (default, variable Material Symbols) \| `svg` |
+| Ikony — řez | `icons.style` | `outlined` (default) \| `rounded` \| `sharp` |
+| Ikony — počet velikostí | `icons.sizeCount` | 1–4; default 3; doroste / uřízne `sizes[]` |
+| Ikony — slot | `icons.sizes[i]` | `{ fontSizePx, weight }` (weight default 400). Token name z **indexu**: `0=sm` `1=md` `2=lg` `3=xl` (ne z count) |
 | Počet stylů | `styleCount` | 1–24; viz §5.2 a §8 |
 | Základní krok škály | `baseStyle` | Musí odpovídat některému `styles[].name` |
 | Velikost base kroku | `baseSizePx` | Modular px; **rem root je vždy ÷16** |
@@ -197,7 +204,7 @@ Po agresivní změně count **ověř názvy, overrides a `baseStyle`** (remap je
 | Leading | `lineHeight` | Vynechat = z LH křivky |
 | Odstavec | `paragraphSpacingRem` | Vynechat = stejné rem jako `font-size` stylu |
 | Řez regular / bold | `weightRegular` / `weightBold` | Vynechat = globál |
-| Přejmenovat styl | `name` | `a-z`, `0-9`, `-` (kebab); duplicity se při normalize přejmenují |
+| Přejmenovat styl | `name` | `a-z`, `0-9`, `-` (kebab); duplicity se při normalize přejmenují. **`icon` je rezervované** → `style` |
 
 **Clear override** = smazat klíč z JSON (nebo `null`) → znovu globál / křivka.
 
@@ -205,8 +212,13 @@ Po agresivní změně count **ověř názvy, overrides a `baseStyle`** (remap je
 
 | Věc | Kde žije |
 | :--- | :--- |
-| Sample sentence v preview | Jen playground UI — **ne** do engine JSON |
-| Google Fonts `<link>` | Spotřebitel podle `googleFontsUrl` |
+| Sample sentence / icon name v preview | Jen playground UI — **ne** do engine JSON |
+| SVG markup ikon v preview | Jen playground (inline fetch) — **ne** do configu / tokenů |
+| Google Fonts `<link>` | Spotřebitel: `googleFontsUrl`, fallback `googleFontsUrlStatic` |
+| Material Symbols `<link>` | Spotřebitel podle `iconFontsUrl` (jen `source: font`) |
+| Katalog glyphů | Mimo engine — spotřebitel |
+| Fill / outline ikon | Spotřebitel. Font: osa `FILL` 0 (outline) \| 1 (fill). SVG: jiný asset. **Ne** v configu ani v tokenech. |
+| Optical size ikon | Font: `font-optical-sizing: auto` (prohlížeč default) — **nenastavuj `"opsz"`** ve `font-variation-settings`, pokud k tomu nemáš důvod. SVG: asset **24px** (opsz 24), škáluj CSS. Engine `opsz` neemituje. |
 | Mapování na komponenty | Spotřebitelský DS |
 
 ---
@@ -220,7 +232,8 @@ Po agresivní změně count **ověř názvy, overrides a `baseStyle`** (remap je
 - `normalizeStateForStyleCount` (když měníš `styleCount` na už načteném state)
 - `resolveStyles` (když potřebuješ vypočtené metriky bez CSS)
 - `formatBezierCss` / `parseBezierCss` (validace křivek v toolingu)
-- `googleFontsCssUrl(family)`
+- `googleFontsCssUrl(family)` / `googleFontsCssUrlStatic(family)`
+- `materialSymbolsCssUrl(style)` (jen když skládáš `<link>` mimo `iconFontsUrl`)
 - `formatRem` / `formatEm` / `formatUnitless` (jen pokud skládáš CSS mimo `tokensCss` — běžně netřeba)
 
 **Nepoužívej** low-level (`interpolateFloat`, `cubicBezierY`, …) pro běžný workflow — detaily v `DEV.md`.
@@ -239,6 +252,7 @@ Po agresivní změně count **ověř názvy, overrides a `baseStyle`** (remap je
 8. **Playground není zdroj pravdy** — soubor configu ano.
 9. Roundtrip `generate → export → import → generate` při stejném configu = **stejné tokeny**.
 10. Typo a color engine **nesdílí** kód ani CSS.
+11. **Ikony = globální source + style + 1–4 sizes.** Nesledují type scale. Názvy slotů z indexu (`sm`/`md`/`lg`/`xl`). Žádné `opsz` / fill tokeny. Font: opsz **auto**. SVG: kresba **24px**. `FILL` řeší spotřebitel.
 
 ---
 
@@ -251,7 +265,8 @@ Podrobnosti: [`src/DEV.md`](./src/DEV.md).
 - **`generateSystem` mutuje `state`** → persistuj `config` z návratové hodnoty; případně clone před generate.
 - **`styleCount` nahoru / dolů** → relativní remap slotů; mid overrides se můžou **zkopírovat**, konce **zmizet**; `baseStyle` se může přepnout na existující jméno — **po skoku ověř vizuál / tokeny**.
 - **`styles[]` bez `styleCount`** → count = délka pole; bump jen `styleCount` v JSON **s** existujícím polem stylů doroste teprve když je `styleCount` explicitní.
-- **Duplicate `name`** → normalize přejmenuje; nehackuj ručně v CSS.
+- **Duplicate `name`** → normalize přejmenuje; nehackuj ručně v CSS. Jméno **`icon`** je rezervované (CSS prefix `--typo-icon-*`) → sanitizuje se na `style`.
+- **`icons.sizeCount` dolů** → uřízne konec pole; při 3→2 zmizí tokeny `lg`, `sm`/`md` zůstanou (jména jdou podle indexu, ne podle count).
 - **Rem vs base size** — `baseSizePx: 18` dává `1.125rem` u base kroku, ne `1rem`.
 - **Count = 1** → LS/LH křivka bere jen `start` (`t = 0`); `end` se neuplatní.
 - **Clear override** = pryč z JSON / `null` — prázdný string v UI = inherit.
@@ -319,13 +334,14 @@ Když požadavek koliduje s invariantem (např. očekávání `1rem` při `baseS
 ```text
 1. Edit engine-config.json (intent only)
 2. importEngineConfig → [normalizeStateForStyleCount?] → generateSystem
-3. Write config + tokensCss (+ googleFontsUrl ve spotřebiteli)
+3. Write config + tokensCss (+ googleFontsUrl / googleFontsUrlStatic / iconFontsUrl ve spotřebiteli)
 4. Do not touch typo-engine.js / app / color-engine
 5. README = meaning, DEV.md = API, AGENTS.md = workflow + sharp edges §8
 ```
 
 **Token shape:** `--typo-{name}-{regular|bold}-{font-family|font-size|font-weight|line-height|letter-spacing|paragraph-spacing}`  
-+ root `--typo-font-family`.
++ root `--typo-font-family`.  
++ root `--typo-icon-source`, `--typo-icon-style`, při `source: font` `--typo-icon-font-family`, plus `--typo-icon-{sm|md|lg|xl}-font-size/weight`.
 
 **Default `body-main` sanity check:** LH `1.49`, LS `0.01em`, size `1rem` (při defaults).
 

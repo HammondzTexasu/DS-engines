@@ -8,6 +8,12 @@ import {
   filterStyleNameInput,
   sanitizeStyleName,
   PREVIEW_SENTENCE,
+  ICON_SOURCES,
+  ICON_STYLES,
+  iconFontFamilyName,
+  iconSizeNameForIndex,
+  normalizeIconStyle,
+  materialSymbolsCssUrl,
   formatRem,
   formatEm,
   LINEAR_BEZIER,
@@ -18,6 +24,10 @@ let state = createDefaultState();
 
 /** Preview sample text (UI-only; not in engine config). */
 let previewSentence = PREVIEW_SENTENCE;
+
+/** Preview icon ligature (UI-only; not in engine config). */
+const PREVIEW_ICON_DEFAULT = 'home';
+let previewIconName = PREVIEW_ICON_DEFAULT;
 
 /** @type {Set<string>} */
 const expandedStyles = new Set();
@@ -142,27 +152,24 @@ function refreshDerived(opts = {}) {
   if (configPre) {
     configPre.textContent = formatEngineConfigJson();
   }
+
+  if (!syncIconPreviewDom()) return;
 }
 
-/** @type {Promise<'load' | 'error'> | null} */
-let fontLinkInflight = null;
-/** @type {string} */
-let fontLinkInflightUrl = '';
-
-/** @type {number} */
-let fontCheckGen = 0;
+/** @type {Map<string, { promise: Promise<'load' | 'error' | 'timeout'>, url: string }>} */
+const stylesheetInflight = new Map();
 
 /**
+ * @param {string} linkId
  * @param {string} url
- * @returns {Promise<'load' | 'error'>}
+ * @returns {Promise<'load' | 'error' | 'timeout'>}
  */
-function syncFontLink(url) {
-  const link = document.getElementById('typo-font-link');
+function syncStylesheetLink(linkId, url) {
+  const link = document.getElementById(linkId);
   if (!link) return Promise.resolve(/** @type {const} */ ('error'));
 
-  if (fontLinkInflight && fontLinkInflightUrl === url) {
-    return fontLinkInflight;
-  }
+  const inflight = stylesheetInflight.get(linkId);
+  if (inflight && inflight.url === url) return inflight.promise;
 
   // Cross-origin sheets often have link.sheet === null even when loaded — never
   // reload just because sheet is missing when href already matches.
@@ -170,11 +177,10 @@ function syncFontLink(url) {
     return Promise.resolve(/** @type {const} */ ('load'));
   }
 
-  fontLinkInflightUrl = url;
-  fontLinkInflight = new Promise((resolve) => {
+  const promise = new Promise((resolve) => {
     let settled = false;
     let timer = 0;
-    /** @param {'load' | 'error'} result */
+    /** @param {'load' | 'error' | 'timeout'} result */
     const done = (result) => {
       if (settled) return;
       settled = true;
@@ -188,15 +194,241 @@ function syncFontLink(url) {
     link.addEventListener('load', onLoad);
     link.addEventListener('error', onError);
     link.setAttribute('href', url);
-    timer = window.setTimeout(() => done('error'), 4000);
+    timer = window.setTimeout(() => done('timeout'), 8000);
   }).finally(() => {
-    if (fontLinkInflightUrl === url) {
-      fontLinkInflight = null;
-      fontLinkInflightUrl = '';
-    }
+    const cur = stylesheetInflight.get(linkId);
+    if (cur && cur.url === url) stylesheetInflight.delete(linkId);
   });
 
-  return fontLinkInflight;
+  stylesheetInflight.set(linkId, { promise, url });
+  return promise;
+}
+
+/**
+ * @param {string} url
+ * @returns {Promise<'load' | 'error' | 'timeout'>}
+ */
+function syncFontLink(url) {
+  return syncStylesheetLink('typo-font-link', url);
+}
+
+/** Families where the variable-axis Google CSS 400'd (static fonts). Timeouts are not cached. */
+const googleFontsRangeFailed = new Set();
+
+/**
+ * Prefer `100..900` (any weight on a variable font). If Google 400s, use discrete cuts.
+ * @param {string} family
+ * @param {string} variableUrl
+ * @param {string} staticUrl
+ * @returns {Promise<'load' | 'error' | 'timeout'>}
+ */
+async function syncFontLinkPreferVariable(family, variableUrl, staticUrl) {
+  const key = String(family || '').trim().toLowerCase();
+  if (!googleFontsRangeFailed.has(key)) {
+    const first = await syncFontLink(variableUrl);
+    if (first === 'load') return 'load';
+    if (first === 'error' && key) googleFontsRangeFailed.add(key);
+  }
+  return syncFontLink(staticUrl);
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function previewIconLigature(raw = previewIconName) {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]+/g, '');
+}
+
+/**
+ * Official SVG cuts exist at 100, 200, …, 700. Intermediate weights snap to nearest cut.
+ * Weight 400 has no `wght` suffix in the filename.
+ * @param {number} weight
+ * @returns {100 | 200 | 300 | 400 | 500 | 600 | 700}
+ */
+function iconSvgWeightCut(weight) {
+  const n = Number(weight);
+  if (!Number.isFinite(n)) return 400;
+  const cut = Math.round(n / 100) * 100;
+  return /** @type {100 | 200 | 300 | 400 | 500 | 600 | 700} */ (
+    Math.min(700, Math.max(100, cut))
+  );
+}
+
+/**
+ * Official Google 24px drawing (opsz 24). Display size is CSS only.
+ * @param {string} style
+ * @param {string} ligature
+ * @param {number} weight
+ * @returns {string}
+ */
+function iconSvgPreviewUrl(style, ligature, weight) {
+  const folder = `materialsymbols${normalizeIconStyle(style)}`;
+  const name = String(ligature || PREVIEW_ICON_DEFAULT).replace(/[^a-z0-9_]/g, '');
+  const cut = iconSvgWeightCut(weight);
+  const wght = cut === 400 ? '' : `_wght${cut}`;
+  return `https://cdn.jsdelivr.net/gh/google/material-design-icons@master/symbols/web/${name}/${folder}/${name}${wght}_24px.svg`;
+}
+
+/** @type {Map<string, string | Promise<string | null>>} */
+const iconSvgCache = new Map();
+
+/**
+ * @param {string} url
+ * @returns {Promise<string | null>}
+ */
+function loadIconSvgMarkup(url) {
+  const cached = iconSvgCache.get(url);
+  if (typeof cached === 'string') return Promise.resolve(cached);
+  if (cached) return cached;
+
+  const pending = fetch(url)
+    .then(async (res) => {
+      if (!res.ok) {
+        iconSvgCache.delete(url);
+        return null;
+      }
+      const text = await res.text();
+      iconSvgCache.set(url, text);
+      return text;
+    })
+    .catch(() => {
+      iconSvgCache.delete(url);
+      return null;
+    });
+
+  iconSvgCache.set(url, pending);
+  return pending;
+}
+
+/**
+ * @param {SVGElement} svg
+ * @param {number} px
+ */
+function sizePreviewSvg(svg, px) {
+  svg.setAttribute('width', String(px));
+  svg.setAttribute('height', String(px));
+  svg.style.width = `${px}px`;
+  svg.style.height = `${px}px`;
+}
+
+/**
+ * @param {string} markup
+ * @param {number} px
+ * @returns {SVGElement | null}
+ */
+function parsePreviewSvg(markup, px) {
+  const doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (!(svg instanceof SVGElement) || svg.tagName.toLowerCase() !== 'svg') return null;
+  svg.classList.add('icon-preview-svg');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.querySelectorAll('[fill]').forEach((el) => {
+    if (el.getAttribute('fill') !== 'none') el.setAttribute('fill', 'currentColor');
+  });
+  svg.setAttribute('fill', 'currentColor');
+  sizePreviewSvg(svg, px);
+  return /** @type {SVGElement} */ (document.importNode(svg, true));
+}
+
+/**
+ * @param {HTMLElement} glyph
+ * @param {import('../src/typo-engine.js').EngineState['icons']['style']} style
+ * @param {import('../src/typo-engine.js').IconSizeConfig} size
+ */
+function applyIconPreviewGlyph(glyph, style, size) {
+  const family = iconFontFamilyName(style);
+  const px = size.fontSizePx;
+  glyph.textContent = previewIconLigature() || PREVIEW_ICON_DEFAULT;
+  glyph.style.fontFamily = `"${family}"`;
+  glyph.style.fontSize = `${px}px`;
+  glyph.style.fontWeight = String(size.weight);
+  glyph.style.fontOpticalSizing = 'auto';
+  // Do not set "opsz" — font-optical-sizing: auto maps it from font-size.
+  glyph.style.fontVariationSettings = `"FILL" 0, "wght" ${size.weight}, "GRAD" 0`;
+}
+
+let iconPreviewGen = 0;
+
+/**
+ * @returns {boolean} false if a full remount was triggered
+ */
+function syncIconPreviewDom() {
+  const row = app.querySelector('.icon-preview-row');
+  if (!row) return true;
+  const sizes = state.icons.sizes;
+  const cells = row.querySelectorAll('.icon-preview-cell');
+  if (cells.length !== sizes.length) {
+    render();
+    return false;
+  }
+  const gen = ++iconPreviewGen;
+  void Promise.all(
+    [...cells].map((cell, i) => {
+      if (!(cell instanceof HTMLElement)) return Promise.resolve();
+      return fillIconPreviewCell(cell, sizes[i], i, gen);
+    }),
+  );
+  return true;
+}
+
+/**
+ * @param {HTMLElement} cell
+ * @param {import('../src/typo-engine.js').IconSizeConfig} size
+ * @param {number} index
+ * @param {number} gen
+ */
+async function fillIconPreviewCell(cell, size, index, gen) {
+  const ligature = previewIconLigature() || PREVIEW_ICON_DEFAULT;
+  const slot = iconSizeNameForIndex(index);
+  const meta = cell.querySelector('.preview-meta');
+  const mark = cell.querySelector('.icon-preview-mark');
+  if (meta instanceof HTMLElement) {
+    const src = state.icons.source;
+    meta.textContent = `${ligature} · ${slot} · ${size.fontSizePx}px · w${size.weight}${src === 'svg' ? ' · svg' : ''}`;
+  }
+  if (!(mark instanceof HTMLElement)) return;
+
+  if (state.icons.source !== 'svg') {
+    delete mark.dataset.svgKey;
+    let glyph = mark.querySelector('.icon-preview-glyph');
+    if (!(glyph instanceof HTMLElement) || mark.querySelector('svg')) {
+      mark.replaceChildren();
+      glyph = document.createElement('span');
+      glyph.className = 'icon-preview-glyph';
+      glyph.setAttribute('aria-hidden', 'true');
+      mark.appendChild(glyph);
+    }
+    applyIconPreviewGlyph(glyph, state.icons.style, size);
+    return;
+  }
+
+  const url = iconSvgPreviewUrl(state.icons.style, ligature, size.weight);
+  const px = size.fontSizePx;
+  const existing = mark.querySelector('svg');
+  if (existing instanceof SVGElement && mark.dataset.svgKey === url) {
+    sizePreviewSvg(existing, px);
+    return;
+  }
+
+  const markup = await loadIconSvgMarkup(url);
+  if (gen !== iconPreviewGen || !mark.isConnected) return;
+
+  mark.dataset.svgKey = url;
+  mark.replaceChildren();
+  if (!markup) {
+    const miss = document.createElement('span');
+    miss.className = 'icon-preview-missing';
+    miss.textContent = '—';
+    mark.appendChild(miss);
+    return;
+  }
+  const svg = parsePreviewSvg(markup, px);
+  if (svg) mark.appendChild(svg);
 }
 
 /**
@@ -230,13 +462,14 @@ function isFontFamilyAvailable(family) {
  * @param {number} [ms]
  * @returns {Promise<void>}
  */
-function loadFamilyFaces(family, ms = 1200) {
+function loadFamilyFaces(family, ms = 8000) {
   const safe = String(family || '').trim().replace(/"/g, '');
   if (!safe || !document.fonts?.load) return Promise.resolve();
 
   const loads = Promise.all([
     document.fonts.load(`400 48px "${safe}"`),
     document.fonts.load(`700 48px "${safe}"`),
+    document.fonts.ready.catch(() => undefined),
   ]).then(() => undefined);
 
   const timeout = new Promise((resolve) => {
@@ -246,13 +479,17 @@ function loadFamilyFaces(family, ms = 1200) {
   return Promise.race([loads, timeout]).then(() => undefined);
 }
 
+/** @type {number} */
+let fontCheckGen = 0;
+
 /**
  * Config keeps the typed name; UI only reports when preview falls back.
  * @param {string} family
  * @param {HTMLElement} statusEl
  * @param {string} googleFontsUrl
+ * @param {string} googleFontsUrlStatic
  */
-async function refreshFontFallbackStatus(family, statusEl, googleFontsUrl) {
+async function refreshFontFallbackStatus(family, statusEl, googleFontsUrl, googleFontsUrlStatic) {
   const gen = ++fontCheckGen;
   const name = String(family || '').trim() || 'Inter';
 
@@ -274,7 +511,11 @@ async function refreshFontFallbackStatus(family, statusEl, googleFontsUrl) {
 
   clearStatus();
 
-  const linkResult = await syncFontLink(googleFontsUrl);
+  const linkResult = await syncFontLinkPreferVariable(
+    name,
+    googleFontsUrl,
+    googleFontsUrlStatic,
+  );
   if (stale()) return;
 
   // System fonts often work even when Google CSS 404s — always metric-check.
@@ -286,13 +527,15 @@ async function refreshFontFallbackStatus(family, statusEl, googleFontsUrl) {
     return;
   }
 
-  // One frame retry only after a successful stylesheet load (web font settling).
+  // Stylesheet `load` ≠ woff2 ready. Retry after settling.
   if (linkResult === 'load') {
-    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
-    if (stale()) return;
-    if (isFontFamilyAvailable(name)) {
-      clearStatus();
-      return;
+    for (const delay of [150, 400, 1000]) {
+      await new Promise((r) => setTimeout(r, delay));
+      if (stale()) return;
+      if (isFontFamilyAvailable(name)) {
+        clearStatus();
+        return;
+      }
     }
   }
 
@@ -1409,7 +1652,7 @@ function render() {
     const configPanelExpanded = collectCollapsePanelExpanded('config');
     const tokensPanelExpanded = collectCollapsePanelExpanded('tokens');
 
-    const { tokensCss, styles, googleFontsUrl } = system();
+    const { tokensCss, styles, googleFontsUrl, googleFontsUrlStatic } = system();
 
     // Drop expansion keys for styles removed by styleCount remap.
     const liveNames = new Set(styles.map((s) => s.name));
@@ -1468,7 +1711,15 @@ function render() {
   fontStatus.hidden = true;
   fontGroup.appendChild(fontStatus);
   globalControls.appendChild(fontRow);
-  void refreshFontFallbackStatus(state.fontFamily, fontStatus, googleFontsUrl);
+  void refreshFontFallbackStatus(
+    state.fontFamily,
+    fontStatus,
+    googleFontsUrl,
+    googleFontsUrlStatic,
+  );
+  void syncStylesheetLink('typo-icon-font-link', materialSymbolsCssUrl(state.icons.style)).then(
+    () => loadFamilyFaces(iconFontFamilyName(state.icons.style)),
+  );
 
   const scaleRow = document.createElement('div');
   scaleRow.className = 'control-row';
@@ -1538,6 +1789,71 @@ function render() {
     step: 0.01,
     min: 0.5,
     max: 2,
+  });
+
+  const iconRow = document.createElement('div');
+  iconRow.className = 'control-row';
+  controlGroup(iconRow, 'icon source', () => {
+    const select = document.createElement('select');
+    select.className = 'ui-control ui-control--select ui-control--block';
+    const sourceLabels = { font: 'Font (variable)', svg: 'SVG' };
+    for (const value of ICON_SOURCES) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = sourceLabels[value];
+      if (value === state.icons.source) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => {
+      state.icons.source = select.value === 'svg' ? 'svg' : 'font';
+      render();
+    });
+    return select;
+  });
+  controlGroup(iconRow, 'icon style', () => {
+    const select = document.createElement('select');
+    select.className = 'ui-control ui-control--select ui-control--block';
+    const styleLabels = { outlined: 'Outlined', rounded: 'Rounded', sharp: 'Sharp' };
+    for (const value of ICON_STYLES) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = styleLabels[value];
+      if (value === state.icons.style) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => {
+      const v = select.value;
+      state.icons.style = v === 'rounded' || v === 'sharp' ? v : 'outlined';
+      render();
+    });
+    return select;
+  });
+  globalControls.appendChild(iconRow);
+
+  const iconCountRow = document.createElement('div');
+  iconCountRow.className = 'control-row';
+  iconCountRow.appendChild(
+    createSliderControl('icon sizes', state.icons.sizeCount, 1, 4, (n) => {
+      state.icons.sizeCount = n;
+    }, { step: 1, structural: true }),
+  );
+  globalControls.appendChild(iconCountRow);
+
+  state.icons.sizes.forEach((size, i) => {
+    const name = iconSizeNameForIndex(i, state.icons.sizes.length);
+    const sizeRow = document.createElement('div');
+    sizeRow.className = 'control-row';
+    sizeRow.appendChild(
+      createSliderControl(`${name} size (px)`, size.fontSizePx, 12, 64, (n) => {
+        size.fontSizePx = n;
+      }, { step: 1 }),
+    );
+    sizeRow.appendChild(
+      createSliderControl(`${name} weight`, size.weight, 100, 700, (n) => {
+        size.weight = n;
+      }, { step: 50 }),
+    );
+    globalControls.appendChild(sizeRow);
   });
 
   sidebarBody.appendChild(wrapSection('Global', globalControls));
@@ -1764,6 +2080,45 @@ function render() {
 
   previewBody.appendChild(grid);
   main.appendChild(wrapSection('Preview', previewBody));
+
+  const iconPreviewBody = document.createElement('div');
+  iconPreviewBody.className = 'preview-body icon-preview-body';
+
+  const iconNameRow = document.createElement('div');
+  iconNameRow.className = 'control-row control-row--full';
+  controlGroup(iconNameRow, 'icon name', () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'ui-control ui-control--block';
+    input.value = previewIconName;
+    input.spellcheck = false;
+    input.placeholder = PREVIEW_ICON_DEFAULT;
+    input.setAttribute('aria-label', 'Preview icon name');
+    input.addEventListener('input', () => {
+      previewIconName = input.value;
+      syncIconPreviewDom();
+    });
+    return input;
+  });
+  iconPreviewBody.appendChild(iconNameRow);
+
+  const iconRowPreview = document.createElement('div');
+  iconRowPreview.className = 'icon-preview-row';
+  state.icons.sizes.forEach((size, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'icon-preview-cell';
+    const meta = document.createElement('p');
+    meta.className = 'preview-meta';
+    cell.appendChild(meta);
+    const mark = document.createElement('div');
+    mark.className = 'icon-preview-mark';
+    cell.appendChild(mark);
+    iconRowPreview.appendChild(cell);
+    void fillIconPreviewCell(cell, size, i, iconPreviewGen);
+  });
+  iconPreviewBody.appendChild(iconRowPreview);
+
+  main.appendChild(wrapSection('Icon preview', iconPreviewBody));
 
   main.appendChild(
     createCollapsePanel('Engine config', 'config', createConfigPanelBody(), configPanelExpanded),
