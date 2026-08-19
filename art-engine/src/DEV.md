@@ -1,32 +1,34 @@
-# Art Engine — maintainer/API notes
+# Art Engine — DEV
 
-## Contract
+Produkt: [`../README.md`](../README.md). AI: [`../AGENTS.md`](../AGENTS.md).
 
-Art Engine is a deterministic formatter and normalizer:
+## Kontrakt
+
+Art Engine je deterministický formatter a normalizer:
 
 ```text
 ArtState → normalize/export → generatePrompt → string
 ```
 
-It performs no model calls and has no runtime dependency.
+Neprovádí žádná volání modelu a nemá runtime závislost.
 
-## Public API
+## Veřejné API
 
-| Export | Purpose |
+| Export | Účel |
 | :--- | :--- |
-| `createDefaultState()` | Editable starter profile with default dimensions |
-| `importEngineConfig(value)` | Parse and normalize JSON/string input |
-| `exportEngineConfig(state)` | Return the canonical serializable config |
-| `generatePrompt(state)` | Produce the single Art Engine prompt |
-| `generateSystem(state)` | Return `{ config, prompt }` |
-| `normalizeAxes(value)` | Validate free-form dimensions and dedupe names |
-| `normalizeAxisSnippet(value)` | Validate one reference override |
-| `normalizeAxisSnippets(value, legacy?)` | Validate axis overrides and migrate legacy `snippet` |
-| `assignUniqueAxisName(name, usedKeys)` | Append `-2`, `-3`, … when a sanitized name collides |
-| `clampAxisValue(value)` | Round and clamp to 0–100 |
-| `sanitizeId(value)` | Normalize profile names and dedupe axis names internally |
+| `createDefaultState()` | Editovatelný startovní profil s výchozími dimenzemi |
+| `importEngineConfig(value)` | Parsovat a normalizovat JSON/string vstup |
+| `exportEngineConfig(state)` | Vrátit kanonický serializovatelný config |
+| `generatePrompt(state)` | Vyrobit jediný Art Engine prompt |
+| `generateSystem(state)` | Vrátit `{ config, prompt }` |
+| `normalizeAxes(value)` | Validovat volné dimenze a deduplikovat názvy |
+| `normalizeAxisSnippet(value)` | Validovat jeden reference override |
+| `normalizeAxisSnippets(value, legacy?)` | Validovat override osy a migrovat legacy `snippet` |
+| `assignUniqueAxisName(name, usedKeys)` | Připojit `-2`, `-3`, … když sanitizovaný název koliduje |
+| `clampAxisValue(value)` | Zaokrouhlit a clampovat na 0–100 |
+| `sanitizeId(value)` | Normalizovat názvy profilu a interně deduplikovat názvy os |
 
-## State shape
+## Tvar stavu
 
 ```js
 {
@@ -43,28 +45,28 @@ It performs no model calls and has no runtime dependency.
 }
 ```
 
-Axes are free-form and may be empty. Import preserves their order, clamps values, dedupes duplicate names with `-2`, `-3` suffixes, and accepts legacy `label`/`id` fields. Snippets are retained only when `code` is non-empty, capped at 8 per axis; language defaults to `text`. A legacy `snippet` object is migrated into `snippets`.
+Osy jsou volné a mohou být prázdné. Import zachová jejich pořadí, clampuje hodnoty, deduplikuje duplicitní názvy suffixy `-2`, `-3` a přijímá legacy pole `label`/`id`. Snippety se ponechají jen když `code` není prázdný, max 8 na osu; language defaultuje na `text`. Legacy `snippet` se při importu přesune do `snippets`.
 
-## Invariants
+## Invarianty
 
-1. Same canonical config produces the same prompt.
-2. Export uses only `name` for each axis; there is no separate axis ID field.
-3. Default dimensions live in `config/engine-config.json` and `createDefaultState()`; normalization never restores deleted axes.
-4. Missing optional `confidence` and empty `snippets` are omitted from exported JSON.
-5. Axis snippets are scoped reference overrides, not a global component or token definition.
-6. Prompt output always includes product/usability/accessibility priority and integration boundaries.
-7. Config is intent; generated prompt is disposable output.
+1. Stejný kanonický config vyrobí stejný prompt.
+2. Export používá u každé osy jen `name`; samostatné pole axis ID neexistuje.
+3. Výchozí dimenze žijí v `config/engine-config.json` a `createDefaultState()`; normalizace nikdy neobnoví smazané osy.
+4. Chybějící volitelné `confidence` a prázdné `snippets` se z exportovaného JSON vynechají.
+5. Axis snippety jsou scoped reference override, ne globální definice komponenty ani tokenů.
+6. Výstup promptu vždy obsahuje prioritu produktu/usability/accessibility a integrační boundaries.
+7. Config je intent; vygenerovaný prompt je jednorázový výstup.
 
-## Verification
+## Verifikace
 
-For changes to the engine, verify:
+Při změnách enginu ověř:
 
 - JSON import/export roundtrip,
-- zero axes and custom axes,
-- no hard cap on axis count,
-- duplicate axis name normalization (`Name-2`),
-- legacy `id`/`label` and `snippet` import migration,
-- valid and empty axis snippet normalization,
-- values below/above range,
-- deterministic prompt equality after roundtrip,
-- prompt includes every active rule, anti-rule, heuristic, axis, and reference override.
+- nula os i vlastní osy,
+- žádný tvrdý strop na počet os,
+- normalizace duplicitních názvů os (`Name-2`),
+- import migrace legacy `id`/`label` a `snippet`,
+- normalizace platného i prázdného axis snippetu,
+- hodnoty pod/nad rozsahem,
+- deterministická rovnost promptu po roundtripu,
+- prompt obsahuje každé aktivní pravidlo, anti-rule, heuristic, osu i reference override.

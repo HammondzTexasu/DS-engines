@@ -1,33 +1,33 @@
 # Typo Engine
 
-Headless modular type scale (Google Font + size scale + letter-spacing / line-height curves) → **JSON config** + **CSS tokens**.
+Headless modulární typografická škála (Google Font + size scale + křivky letter-spacing / line-height) → **JSON config** + **CSS tokeny**.
 
 Playground: [`app/`](./app/). AI workflow: [`AGENTS.md`](./AGENTS.md). API: [`src/DEV.md`](./src/DEV.md).
 
-**Does not share code or CSS with `color-engine`.** Same product principles (config = intent, generate = tokens).
+**Nesdílí kód ani CSS s `color-engine`.** Stejné produktové principy (config = intent, generate = tokeny).
 
-## Defaults
+## Výchozí hodnoty
 
-| Setting | Default |
+| Nastavení | Default |
 | :--- | :--- |
 | Font | Inter (Google Fonts) |
-| Styles | 9 (`tiny` … `display`) |
-| Base style | `body-main` (assignable) |
-| Base size | 16px → `1rem` (rem root is always ÷16) |
+| Styly | 9 (`tiny` … `display`) |
+| Base style | `body-main` (přiřaditelný) |
+| Base size | 16px → `1rem` (rem root je vždy ÷16) |
 | Size scale | 1.25 (Major Third) |
 | Weights | regular 400 / bold 700 |
-| Letter-spacing | start `0.02em` → end `-0.02em`, linear Bézier |
-| Line-height | start `1.6` → end `1.15`, linear Bézier (unitless) |
-| Paragraph-spacing | inherit = same rem as that style’s `font-size` |
-| Icons | Material Symbols **font** (variable) + **Outlined**; 3 sizes (20 / 24 / 40 px, weight 400) |
+| Letter-spacing | start `0.02em` → end `-0.02em`, lineární Bézier |
+| Line-height | start `1.6` → end `1.15`, lineární Bézier (bezjednotkové) |
+| Paragraph-spacing | inherit = stejný rem jako `font-size` daného stylu |
+| Ikony | Material Symbols **font** (variable) + **Outlined**; 3 velikosti (20 / 24 / 40 px, weight 400) |
 
-Each style emits **`-regular`** and **`-bold`** token sets. Per-style fields inherit globals (empty / null) until overridden. Style name **`icon`** is reserved (collides with `--typo-icon-*`) and sanitizes to `style`. Text weights clamp to **100–900**.
+Každý styl emituje sady tokenů **`-regular`** a **`-bold`**. Pole per-style dědí globály (prázdné / `null`), dokud nejsou přepsaná. Jméno stylu **`icon`** je rezervované (koliduje s `--typo-icon-*`) a sanitizuje se na `style`. Textové weights se clampují na **100–900**.
 
-Icon tokens are **global**: source, style, family (when font), plus `--typo-icon-{sm|md|lg|xl}-font-size/weight` (1–4 sizes, independent of the type scale). Slot names follow **index**, not count: `0=sm`, `1=md`, `2=lg`, `3=xl`. Shrinking 3→2 drops `lg` only (`sm`/`md` stay). Fill vs outline is **not** an engine token — font: `"FILL"` 0\|1; SVG: a different asset. Optical size is not a token: font uses `font-optical-sizing: auto` (do not pin `"opsz"` unless you have a reason); SVG uses the **24px** asset and scales in CSS. SVG preview in the playground is UI-only (not in config/tokens).
+Ikonové tokeny jsou **globální**: source, style, family (když font), plus `--typo-icon-{sm|md|lg|xl}-font-size/weight` (1–4 velikosti, nezávislé na type scale). Názvy slotů jdou podle **indexu**, ne podle count: `0=sm`, `1=md`, `2=lg`, `3=xl`. Zmenšení 3→2 zahodí jen `lg` (`sm`/`md` zůstanou). Fill vs outline **není** token enginu — font: `"FILL"` 0\|1; SVG: jiný asset. Optical size není token: font používá `font-optical-sizing: auto` (nepřipínej `"opsz"`, pokud k tomu nemáš důvod); SVG používá asset **24px** a škáluje v CSS. SVG náhled v playgroundu je jen UI (není v configu/tokenech).
 
-## Tokens (example)
+## Tokeny (příklad)
 
-Default `body-main` (index on the 9-step scale):
+Default `body-main` (index na 9krokové škále):
 
 ```css
 :root {
@@ -58,4 +58,4 @@ import { importEngineConfig, generateSystem } from './src/typo-engine.js';
 const { tokensCss, config } = generateSystem(importEngineConfig(json));
 ```
 
-`generateSystem` **mutates** the state in place (normalize names / `styleCount` / `baseStyle`). Clone first if you need an immutable copy.
+`generateSystem` **mutuje** state na místě (normalize jmen / `styleCount` / `baseStyle`). Pokud potřebuješ neměnnou kopii, nejdřív clone.
