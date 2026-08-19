@@ -71,10 +71,10 @@ import { hexToOklch } from '../lib/oklch-relative-chroma.mjs';
 let state = createDefaultState();
 
 /** Project config next to app/src — loaded at boot when present. */
-const LOCAL_CONFIG_URL = new URL('../config/engine-config.json', import.meta.url);
+const LOCAL_CONFIG_URL = new URL('../config/color-config.json', import.meta.url);
 
 /**
- * Prefer `config/engine-config.json`; fall back to engine `createDefaultState()`.
+ * Prefer `config/color-config.json`; fall back to engine `createDefaultState()`.
  * @returns {Promise<ReturnType<typeof createDefaultState>>}
  */
 async function loadInitialState() {
@@ -700,7 +700,7 @@ function createConfigPanelBody() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'color-engine-config.json';
+    link.download = 'color-config.json';
     link.click();
     URL.revokeObjectURL(url);
     setStatus('Config downloaded.');

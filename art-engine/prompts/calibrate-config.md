@@ -1,6 +1,6 @@
 # Calibrate Art Engine config
 
-Use this workflow in any multimodal AI. Attach representative screenshots, an optional written brief, and the current `config/engine-config.json`.
+Use this workflow in any multimodal AI. Attach representative screenshots, an optional written brief, and the current `config/art-config.json`.
 
 ## Task
 

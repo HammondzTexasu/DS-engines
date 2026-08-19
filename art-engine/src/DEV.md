@@ -51,7 +51,7 @@ Osy jsou volné a mohou být prázdné. Import zachová jejich pořadí, clampuj
 
 1. Stejný kanonický config vyrobí stejný prompt.
 2. Export používá u každé osy jen `name`; samostatné pole axis ID neexistuje.
-3. Výchozí dimenze žijí v `config/engine-config.json` a `createDefaultState()`; normalizace nikdy neobnoví smazané osy.
+3. Výchozí dimenze žijí v `config/art-config.json` a `createDefaultState()`; normalizace nikdy neobnoví smazané osy.
 4. Chybějící volitelné `confidence` a prázdné `snippets` se z exportovaného JSON vynechají.
 5. Axis snippety jsou scoped reference override, ne globální definice komponenty ani tokenů.
 6. Výstup promptu vždy obsahuje prioritu produktu/usability/accessibility a integrační boundaries.

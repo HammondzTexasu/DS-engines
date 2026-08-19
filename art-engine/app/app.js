@@ -20,10 +20,10 @@ let refreshRaf = null;
 /** @type {{ message: string, isError: boolean } | null} */
 let pendingConfigStatus = null;
 
-/** Prefer `config/engine-config.json`; fall back to engine `createDefaultState()`. */
+/** Prefer `config/art-config.json`; fall back to engine `createDefaultState()`. */
 async function loadInitialState() {
   try {
-    const response = await fetch('../config/engine-config.json', { cache: 'no-store' });
+    const response = await fetch('../config/art-config.json', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return importEngineConfig(await response.json());
   } catch {
@@ -674,7 +674,7 @@ function configControls() {
   downloadBtn.className = 'palette-header-action';
   downloadBtn.textContent = 'Download JSON';
   downloadBtn.addEventListener('click', () => {
-    downloadText(configJson(), 'art-engine-config.json', 'application/json');
+    downloadText(configJson(), 'art-config.json', 'application/json');
     setStatus(status, 'Config downloaded.');
   });
   actions.appendChild(downloadBtn);

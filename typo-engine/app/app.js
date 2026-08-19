@@ -51,7 +51,7 @@ function dismissFloatingPanels() {
 
 async function boot() {
   try {
-    const res = await fetch('../config/engine-config.json', { cache: 'no-store' });
+    const res = await fetch('../config/typo-config.json', { cache: 'no-store' });
     if (res.ok) {
       state = importEngineConfig(await res.json());
     }
@@ -717,7 +717,7 @@ function createConfigPanelBody() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'typo-engine-config.json';
+    link.download = 'typo-config.json';
     link.click();
     URL.revokeObjectURL(url);
     setStatus('Config downloaded.');

@@ -20,7 +20,7 @@ Upravuješ **intent v JSON configu**, spustíš **headless generate**, zapíše�
 
 ```text
 ┌─────────────────────┐
-│  engine-config.json │  ← jediný zdroj pravdy (intent)
+│  typo-config.json   │  ← jediný zdroj pravdy (intent)
 └──────────┬──────────┘
            │ importEngineConfig
            ▼
@@ -29,7 +29,7 @@ Upravuješ **intent v JSON configu**, spustíš **headless generate**, zapíše�
 │   generateSystem()  │
 └──────────┬──────────┘
            │
-           ├─► engine-config.json  (export / normalizovaný config)
+           ├─► typo-config.json    (export / normalizovaný config)
            └─► typo tokens CSS     (metriky: :root { --typo-… })
 ```
 
@@ -49,7 +49,7 @@ Upravuješ **intent v JSON configu**, spustíš **headless generate**, zapíše�
 
 ### 2.1 Smíš (default)
 
-1. Číst a editovat `config/engine-config.json` (nebo ekvivalent ve spotřebitelském projektu).
+1. Číst a editovat `config/typo-config.json` (nebo ekvivalent ve spotřebitelském projektu).
 2. Volat headless API z `src/typo-engine.js` (import / generate / export / normalize / formáttery).
 3. Přepsat výstupní CSS tokeny výsledkem `generateSystem`.
 4. Číst `README.md` / `DEV.md` při nejasnosti chování.
@@ -75,7 +75,7 @@ Pak nejdřív: reprodukce → `DEV.md` → minimální diff → ověření gener
 
 ### Krok A — Orientace
 
-1. Najdi **projektový config** (typicky `config/engine-config.json`).
+1. Najdi **projektový config** (typicky `config/typo-config.json`).
 2. Najdi **cestu k enginu** (`src/typo-engine.js` v tomto repu, nebo závislost / submodule ve spotřebitelském projektu).
 3. Najdi **kam patří tokeny** (soubor typu `typo.css` / `typography.css` — pokud neexistuje, zeptej se nebo navrhni jedno místo vedle configu).
 
@@ -104,7 +104,7 @@ const state = importEngineConfig(configJson);
 const { tokensCss, config, googleFontsUrl, googleFontsUrlStatic, iconFontsUrl } = generateSystem(state);
 
 // Zapiš OBOJÍ:
-// 1) config       → engine-config.json  (použij `config` z výsledku)
+// 1) config       → typo-config.json  (použij `config` z výsledku)
 // 2) tokensCss    → výstupní .css
 // Volitelně: googleFontsUrl → <link> (variable osa 100..900, mezikroky jako 550)
 //            když CSS **error** (static rodina, ne timeout) → googleFontsUrlStatic
@@ -134,7 +134,7 @@ const { tokensCss, config, googleFontsUrl, googleFontsUrlStatic, iconFontsUrl } 
 
 | Soubor | Role |
 | :--- | :--- |
-| `config/engine-config.json` | Projektový intent (playground ho načte prioritně) |
+| `config/typo-config.json` | Projektový intent (playground ho načte prioritně) |
 | `src/typo-engine.js` | Engine |
 | `app/` | Volitelný vizuální playground — **není** headless API |
 
@@ -147,7 +147,7 @@ Headless happy path: viz `README.md` § Headless a `DEV.md`.
 ```text
 consumer-project/
 ├── design-tokens/
-│   ├── engine-config.json    ← edituj (typo intent; nebo typo-engine-config.json)
+│   ├── typo-config.json      ← edituj
 │   └── typo.css              ← generuj
 └── (engine: npm / git submodule / relative path — NEkoptuj logiku)
 ```
@@ -299,7 +299,7 @@ node --input-type=module ./scripts/regen-typo-tokens.mjs
 
 Pokud regen skript neexistuje, **pro 1.0** ho nevymýšlej jako produkt — stačí jednorázový generate v session a zápis souborů. Trvalý skript jen na výslovnou žádost.
 
-Playground (vizuální kontrola): servíruj `app/` tak, aby bylo dostupné `../config/engine-config.json`.
+Playground (vizuální kontrola): servíruj `app/` tak, aby bylo dostupné `../config/typo-config.json`.
 
 ---
 
@@ -332,7 +332,7 @@ Když požadavek koliduje s invariantem (např. očekávání `1rem` při `baseS
 ## 13. Rychlá karta (TL;DR)
 
 ```text
-1. Edit engine-config.json (intent only)
+1. Edit typo-config.json (intent only)
 2. importEngineConfig → [normalizeStateForStyleCount?] → generateSystem
 3. Write config + tokensCss (+ googleFontsUrl / googleFontsUrlStatic / iconFontsUrl ve spotřebiteli)
 4. Do not touch typo-engine.js / app / color-engine

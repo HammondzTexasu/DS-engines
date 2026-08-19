@@ -24,7 +24,7 @@ Ze screenshotů, popisu a zpětné vazby upravuješ **JSON config**, spustíš *
            │ externí multimodální AI
            ▼
 ┌──────────────────────┐
-│ engine-config.json   │  ← jediný zdroj pravdy
+│ art-config.json      │  ← jediný zdroj pravdy
 └──────────┬───────────┘
            │ importEngineConfig → generateSystem
            ▼
@@ -47,7 +47,7 @@ Ze screenshotů, popisu a zpětné vazby upravuješ **JSON config**, spustíš *
 
 ### 2.1 Smíš (default)
 
-1. Číst a editovat `config/engine-config.json`.
+1. Číst a editovat `config/art-config.json`.
 2. Kalibrovat config ze screenshotů a/nebo popisu podle `prompts/calibrate-config.md`.
 3. Volat veřejné headless API z `src/art-engine.js`.
 4. Přepsat generovaný art-direction text výsledkem `generatePrompt` / `generateSystem`.
@@ -72,7 +72,7 @@ Jen když uživatel výslovně požádá o bugfix nebo novou funkci enginu. Pak:
 
 ### Krok A — Orientace
 
-1. Přečti aktuální `config/engine-config.json`.
+1. Přečti aktuální `config/art-config.json`.
 2. Urči uživatelský intent podle §5: **Calibrate**, **Tune**, **Generate** nebo **Apply**.
 3. Při Calibrate přečti celý `prompts/calibrate-config.md`; při Apply přečti `prompts/apply-art.md`.
 
@@ -91,7 +91,7 @@ const state = importEngineConfig(configJson);
 const { config, prompt } = generateSystem(state);
 
 // Zapiš OBOJÍ:
-// 1) config → engine-config.json
+// 1) config → art-config.json
 // 2) prompt → dohodnutý art-direction.md / prompt soubor
 ```
 
@@ -113,7 +113,7 @@ const { config, prompt } = generateSystem(state);
 
 | Soubor | Role |
 | :--- | :--- |
-| `config/engine-config.json` | Projektový intent |
+| `config/art-config.json` | Projektový intent |
 | `src/art-engine.js` | Headless engine |
 | `prompts/calibrate-config.md` | Reference → config workflow |
 | `prompts/apply-art.md` | Použití promptu při UI práci |
@@ -124,7 +124,7 @@ const { config, prompt } = generateSystem(state);
 ```text
 consumer-project/
 ├── design-intent/
-│   ├── art-engine-config.json
+│   ├── art-config.json
 │   └── art-direction.md
 └── (sdílený Art Engine — nekopíruj jeho logiku)
 ```
@@ -198,7 +198,7 @@ Nepřepisuj normalizaci nebo prompt ručně v agentním workflow.
 - Na jedné ose je max 8 override snippetů (`MAX_AXIS_SNIPPETS`).
 - Silně překrývající se osy rozmělňují prompt; raději méně nezávislých dimenzí.
 - Screenshot ukazuje realizaci, text může vyjadřovat záměr změny; nezaměňuj je.
-- Playground nepersistuje změny automaticky na disk — explicitně stáhni config. Refresh stránky znovu načte `engine-config.json`.
+- Playground nepersistuje změny automaticky na disk — explicitně stáhni config. Refresh stránky znovu načte `art-config.json`.
 
 ---
 
@@ -218,7 +218,7 @@ Nepřepisuj normalizaci nebo prompt ručně v agentním workflow.
 
 Repo nemá povinný CLI/build systém. Headless happy path je ESM import. Pokud trvalý regen skript neexistuje, nevytvářej ho jako produkt bez výslovné žádosti.
 
-Playground servíruj přes HTTP tak, aby mohl načíst `../config/engine-config.json`.
+Playground servíruj přes HTTP tak, aby mohl načíst `../config/art-config.json`.
 
 ---
 
@@ -249,7 +249,7 @@ Playground servíruj přes HTTP tak, aby mohl načíst `../config/engine-config.
 
 ```text
 1. Recognize: Calibrate / Tune / Generate / Apply
-2. Calibrate/Tune → edit engine-config.json
+2. Calibrate/Tune → edit art-config.json
 3. importEngineConfig → generateSystem
 4. Write normalized config + one art-direction prompt
 5. Apply the same prompt for creation and review

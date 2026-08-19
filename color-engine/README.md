@@ -4,7 +4,7 @@ Tento projekt definuje základní pilíř design systému založený na barevné
 
 Engine prozatím **generuje config a CSS tokeny** (CSS = jen barvy). Jak je projekt spotřebuje, řeší jiné vrstvy.
 
-**Konfigurace:** výchozí hodnoty žijí v enginu (`createDefaultState`). Projektový soubor [`config/engine-config.json`](./config/engine-config.json) má prioritu — playground ho při startu načte; když chybí nebo selže, použije se engine default. GUI Import přepíše jen aktuální session.
+**Konfigurace:** výchozí hodnoty žijí v enginu (`createDefaultState`). Projektový soubor [`config/color-config.json`](./config/color-config.json) má prioritu — playground ho při startu načte; když chybí nebo selže, použije se engine default. GUI Import přepíše jen aktuální session.
 
 Vývojářské detaily (API, soubory, headless použití, caveats při agresivních změnách configu): viz [`src/DEV.md`](./src/DEV.md) (§11).  
 AI workflow (config → generate → tokeny, boundaries, sharp edges): viz [`AGENTS.md`](./AGENTS.md).

@@ -8,7 +8,7 @@ Produkt: [`../README.md`](../README.md). AI: [`../AGENTS.md`](../AGENTS.md).
 typo-engine/
 ├── README.md
 ├── AGENTS.md
-├── config/engine-config.json
+├── config/typo-config.json
 ├── src/typo-engine.js
 ├── src/DEV.md
 └── app/          # playground (ne headless API)

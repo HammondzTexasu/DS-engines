@@ -10,7 +10,7 @@
 
 Tři headless enginy pro design systém. Každý má:
 
-- `config/engine-config.json` — zdroj pravdy (intent)
+- `config/{color|typo|art}-config.json` — zdroj pravdy (intent)
 - `src/*-engine.js` — deterministický engine (**neměň** bez výslovného requestu)
 - `app/` — volitelný playground (vizuální kontrola)
 
@@ -44,11 +44,11 @@ Pokud cesta k enginu chybí, **zeptej se** — neforkuj logiku copy-pastem `src/
 ```text
 consumer-project/
 ├── design-tokens/
-│   ├── color-engine-config.json   → generuj colors.css
-│   ├── typo-engine-config.json    → generuj typo.css
+│   ├── color-config.json          → generuj colors.css
+│   ├── typo-config.json           → generuj typo.css
 │   └── (font/icon linky z typo generate)
 ├── design-intent/
-│   ├── art-engine-config.json     → generuj art-direction.md
+│   ├── art-config.json            → generuj art-direction.md
 │   └── art-direction.md
 └── (DS Engines repo — submodule / dependency; NEkopíruj src/)
 ```
@@ -62,7 +62,7 @@ Konkrétní názvy souborů se mohou lišit; drž intent (config) a vygenerovan�
 1. **Config = intent.** Po změně vždy regenerate a zapiš normalizovaný config + výstup.
 2. **Engine kód neměň** (default) — orchestruj config a výstupy.
 3. **Neforkuj** engine do projektu copy-pastem `src/`.
-4. Playground **nepersistuje** session na disk. Refresh znovu načte `engine-config.json`.
+4. Playground **nepersistuje** session na disk. Refresh znovu načte config svého enginu (`color-config.json`, `typo-config.json` nebo `art-config.json`).
 5. Color, typo a art se **nesahají navzájem** „mimochodem“. Odděl práci.
 
 ---

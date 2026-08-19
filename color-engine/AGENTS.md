@@ -19,7 +19,7 @@ Logiku HCT / interpolace / gamutu **neimplementuješ znovu**.
 
 ```text
 ┌─────────────────────┐
-│  engine-config.json │  ← jediný zdroj pravdy (intent)
+│  color-config.json  │  ← jediný zdroj pravdy (intent)
 └──────────┬──────────┘
            │ importEngineConfig
            ▼
@@ -28,7 +28,7 @@ Logiku HCT / interpolace / gamutu **neimplementuješ znovu**.
 │   generateSystem()  │
 └──────────┬──────────┘
            │
-           ├─► engine-config.json  (export / normalizovaný config)
+           ├─► color-config.json   (export / normalizovaný config)
            └─► tokens.css          (jen barvy: :root { --… })
 ```
 
@@ -48,7 +48,7 @@ Logiku HCT / interpolace / gamutu **neimplementuješ znovu**.
 
 ### 2.1 Smíš (default)
 
-1. Číst a editovat `config/engine-config.json` (nebo ekvivalent v spotřebitelském projektu).
+1. Číst a editovat `config/color-config.json` (nebo ekvivalent v spotřebitelském projektu).
 2. Volat headless API z `src/color-engine.js` (import / generate / export / brand / override helpers).
 3. Přepsat výstupní CSS tokeny výsledkem `generateSystem`.
 4. Číst `README.md` / `DEV.md` při nejasnosti chování.
@@ -74,7 +74,7 @@ Pak nejdřív: reprodukce → `DEV.md` § chování → minimální diff → ov�
 
 ### Krok A — Orientace
 
-1. Najdi **projektový config** (typicky `config/engine-config.json`).
+1. Najdi **projektový config** (typicky `config/color-config.json`).
 2. Najdi **cestu k enginu** (`src/color-engine.js` v tomto repu, nebo závislost / submodule ve spotřebitelském projektu).
 3. Najdi **kam patří tokeny** (soubor typu `tokens.css` / `colors.css` — pokud neexistuje, zeptej se nebo navrhni jedno místo vedle configu).
 
@@ -102,7 +102,7 @@ const state = importEngineConfig(configJson);
 const { tokensCss, config } = generateSystem(state);
 
 // Zapiš OBOJÍ:
-// 1) config  → engine-config.json  (použij `config` z výsledku, ne ruční JSON „od oka“)
+// 1) config  → color-config.json  (použij `config` z výsledku, ne ruční JSON „od oka“)
 // 2) tokensCss → výstupní .css
 ```
 
@@ -128,7 +128,7 @@ const { tokensCss, config } = generateSystem(state);
 
 | Soubor | Role |
 | :--- | :--- |
-| `config/engine-config.json` | Projektový intent (playground ho načte prioritně) |
+| `config/color-config.json` | Projektový intent (playground ho načte prioritně) |
 | `src/color-engine.js` | Engine |
 | `app/` | Volitelný vizuální playground — **není** headless API |
 
@@ -141,14 +141,14 @@ Headless happy path: viz `DEV.md` §3.
 ```text
 consumer-project/
 ├── design-tokens/
-│   ├── engine-config.json    ← edituj
+│   ├── color-config.json     ← edituj
 │   └── colors.css            ← generuj
 └── (engine: npm / git submodule / relative path — NEkoptuj logiku)
 ```
 
 Agent ve spotřebitelském projektu:
 
-1. Edituje **jen** `engine-config.json` (+ případně mapování tokenů mimo engine).
+1. Edituje **jen** `color-config.json` (+ případně mapování tokenů mimo engine).
 2. Spustí generate proti **sdílenému** enginu.
 3. Přepíše `colors.css`.
 
@@ -295,7 +295,7 @@ node --experimental-vm-modules ./scripts/regen-tokens.mjs
 
 Pokud `scripts/regen-tokens.mjs` neexistuje, **pro 1.0** ho nevymýšlej jako produkt — stačí jednorázový generate v session a zápis souborů. Trvalý skript jen na výslovnou žádost.
 
-Playground (vizuální kontrola): servíruj `app/` tak, aby bylo dostupné `../config/engine-config.json`.
+Playground (vizuální kontrola): servíruj `app/` tak, aby bylo dostupné `../config/color-config.json`.
 
 ---
 
@@ -327,7 +327,7 @@ Když požadavek koliduje s invariantem (např. interpolate + 1 include step), *
 ## 13. Rychlá karta (TL;DR)
 
 ```text
-1. Edit engine-config.json (intent only)
+1. Edit color-config.json (intent only)
 2. importEngineConfig → [normalizeStateForStepCount?] → generateSystem
 3. Write config + tokensCss
 4. Do not touch color-engine.js / lib / app

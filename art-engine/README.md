@@ -12,7 +12,7 @@ Art Engine nevolá model ani neanalyzuje obrázky. Kalibraci screenshotů a popi
 screenshoty + popis
         │ externí multimodální AI
         ▼
-engine-config.json       ← zdroj pravdy
+art-config.json          ← zdroj pravdy
         │ importEngineConfig → generatePrompt
         ▼
 jeden art-direction prompt
@@ -29,7 +29,7 @@ návrh / implementace / kontrola UI
 - `antiRules`: kam návrh nesmí sklouznout.
 - `heuristics`: jak rozhodovat mezi více validními řešeními.
 
-Osy nejsou povinný fixní slovník. Playground umožňuje osy přidávat, přejmenovat a mazat. Výchozí osy v `engine-config.json` jsou pouze editovatelný start. Snippety patří ke konkrétní dimenzi (např. elevation nebo radius), nefungují jako globální komponenta ani nový tokenový systém.
+Osy nejsou povinný fixní slovník. Playground umožňuje osy přidávat, přejmenovat a mazat. Výchozí osy v `art-config.json` jsou pouze editovatelný start. Snippety patří ke konkrétní dimenzi (např. elevation nebo radius), nefungují jako globální komponenta ani nový tokenový systém.
 
 ## Headless API
 
@@ -47,7 +47,7 @@ Po změně intentu persistuj normalizovaný `config` a regeneruj `prompt`.
 - jeden vycentrovaný sloupec: profil, samostatné stylové dimenze s volitelným reference override a pravidla,
 - dole collapsed **Engine config** a **Art direction prompt** (náhled, Import/Download/Copy podle panelu).
 
-Playground ukládá pouze do paměti prohlížeče. Download je explicitní export na disk. Refresh stránky znovu načte `config/engine-config.json`.
+Playground ukládá pouze do paměti prohlížeče. Download je explicitní export na disk. Refresh stránky znovu načte `config/art-config.json`.
 
 ## Co Art Engine nedělá
 

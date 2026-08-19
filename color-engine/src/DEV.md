@@ -23,7 +23,7 @@ GUI ve složce `app/` je **volitelný playground** — není součástí headles
 color-engine/
 ├── README.md                 # Specifikace (chování, tokeny)
 ├── config/
-│   └── engine-config.json    # Projektový config (playground načte prioritně)
+│   └── color-config.json     # Projektový config (playground načte prioritně)
 ├── src/
 │   ├── color-engine.js       # Headless engine (jediný zdroj pravdy logiky)
 │   └── DEV.md                # Tento soubor
@@ -37,11 +37,11 @@ color-engine/
 ```
 
 **Priorita stavu (playground):**
-1. `config/engine-config.json` (pokud fetch OK + validní) → `importEngineConfig`
+1. `config/color-config.json` (pokud fetch OK + validní) → `importEngineConfig`
 2. jinak engine `createDefaultState()`
 3. GUI Import v session přepíše aktuální stav (nesahá na soubor)
 
-Playground bere config relativně (`../config/engine-config.json` z `app/`). Hostitel musí ten soubor doručit spolu s `app/` — jinak boot spadne na engine default.
+Playground bere config relativně (`../config/color-config.json` z `app/`). Hostitel musí ten soubor doručit spolu s `app/` — jinak boot spadne na engine default.
 
 ---
 
@@ -71,7 +71,7 @@ const fresh = createDefaultState();
 const system = generateSystem(fresh);
 ```
 
-**Playground** při startu zkusí načíst `../config/engine-config.json`; při chybě spadne na B.
+**Playground** při startu zkusí načíst `../config/color-config.json`; při chybě spadne na B.
 
 **Důležité:** `generateSystem(state)` **může změnit** interpolate chroma body přímo ve `state` (viz §6). Nejde o čistou funkci „jen výstup“.
 
