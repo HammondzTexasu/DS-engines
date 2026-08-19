@@ -1,0 +1,74 @@
+{
+  "styleProfile": {
+    "name": "calm-precise",
+    "summary": "Calm, precise and undecorated visual language. Structure and rhythm before decoration; clarity before showcase styling."
+  },
+  "axes": [
+    {
+      "id": "roundedness",
+      "value": 35,
+      "meaningLow": "sharp, precise, technical edges",
+      "meaningHigh": "soft, friendly, tactile curves"
+    },
+    {
+      "id": "spaciousness",
+      "value": 58,
+      "meaningLow": "compact, dense, utilitarian rhythm",
+      "meaningHigh": "airy, calm, generous spacing rhythm"
+    },
+    {
+      "id": "ornament",
+      "value": 18,
+      "meaningLow": "reduction, discipline, minimal effects",
+      "meaningHigh": "decoration, layering, expressive styling"
+    },
+    {
+      "id": "contrast",
+      "value": 52,
+      "meaningLow": "subtle hierarchy and low visual drama",
+      "meaningHigh": "bold separation and strong hierarchy"
+    },
+    {
+      "id": "softness",
+      "value": 42,
+      "meaningLow": "dry surfaces, crisp edges, restrained shadows",
+      "meaningHigh": "gentle surfaces, diffused depth, soft transitions"
+    },
+    {
+      "id": "strictness",
+      "value": 78,
+      "meaningLow": "loose, expressive, less systematic composition",
+      "meaningHigh": "order, rhythm, alignment, optical control"
+    },
+    {
+      "id": "playfulness",
+      "value": 24,
+      "meaningLow": "serious, restrained, professional tone",
+      "meaningHigh": "light, energetic, characterful tone"
+    },
+    {
+      "id": "calmness",
+      "value": 72,
+      "meaningLow": "dynamic, urgent, high visual tempo",
+      "meaningHigh": "calm, stable, low visual noise"
+    }
+  ],
+  "rules": [
+    "Prefer structure and rhythm before decoration.",
+    "Use styling to support hierarchy, not to replace it.",
+    "When uncertain, simplify instead of adding effects.",
+    "Use project color and typography tokens when available; do not invent parallel scales."
+  ],
+  "antiRules": [
+    "Do not produce marketing or showcase UI unless explicitly requested.",
+    "Do not use glassmorphism, heavy blur stacks, or gradient decoration without a clear reason.",
+    "Do not hide weak information architecture behind visual effects.",
+    "Do not default to card-heavy layouts when a simpler structure works."
+  ],
+  "heuristics": [
+    "CTA should feel clear and confident, not aggressive.",
+    "Higher roundedness does not mean pill shapes everywhere.",
+    "Increase spaciousness through section rhythm before random padding inflation.",
+    "Prefer borders or surface contrast before adding shadow depth."
+  ]
+}

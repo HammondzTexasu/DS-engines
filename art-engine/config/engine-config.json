@@ -1,0 +1,45 @@
+{
+  "styleProfile": {
+    "name": "calm-precise",
+    "summary": "Calm, precise and undecorated visual language. Structure and rhythm before decoration; clarity before showcase styling."
+  },
+  "axes": [
+    {
+      "name": "Roundedness",
+      "value": 35,
+      "meaningLow": "sharp, precise, technical edges",
+      "meaningHigh": "soft, friendly, tactile curves"
+    },
+    {
+      "name": "Spaciousness",
+      "value": 58,
+      "meaningLow": "compact, dense, utilitarian rhythm",
+      "meaningHigh": "airy, calm, generous spacing rhythm"
+    },
+    {
+      "name": "Ornament",
+      "value": 18,
+      "meaningLow": "reduction, discipline, minimal effects",
+      "meaningHigh": "decoration, layering, expressive styling"
+    },
+    {
+      "name": "Contrast",
+      "value": 52,
+      "meaningLow": "subtle hierarchy and low visual drama",
+      "meaningHigh": "bold separation and strong hierarchy"
+    }
+  ],
+  "rules": [
+    "Prefer structure and rhythm before decoration.",
+    "Use styling to support hierarchy, not to replace it.",
+    "Use project color and typography tokens when available."
+  ],
+  "antiRules": [
+    "Do not hide weak information architecture behind visual effects.",
+    "Do not default to card-heavy layouts when a simpler structure works."
+  ],
+  "heuristics": [
+    "When uncertain, simplify instead of adding effects.",
+    "Prefer borders or surface contrast before adding shadow depth."
+  ]
+}
