@@ -16,7 +16,7 @@ Return **only one complete valid JSON object** using this shape:
   },
   "axes": [
     {
-      "name": "Human-readable dimension",
+      "name": "Human-readable axis",
       "value": 0,
       "meaningLow": "Concrete meaning of the low pole",
       "meaningHigh": "Concrete meaning of the high pole",
@@ -46,8 +46,8 @@ Return **only one complete valid JSON object** using this shape:
 4. Preserve useful existing config intent unless the new evidence clearly contradicts it.
 5. Axes are free-form. Keep, rename, add, reorder, or remove them when that creates a clearer and less redundant description.
 6. Every axis must describe one meaningful continuum, have explicit low/high poles, and use a value from 0 to 100.
-7. Prefer a small set of independent axes over many overlapping dimensions. Do not add an axis when a rule or heuristic is clearer.
-8. Use `axes[].snippets` only as concrete reference overrides for that dimension, such as canonical elevation or radius implementations for different scopes. Each `note` must state important scope or exceptions.
+7. Prefer a small set of independent axes over many overlapping ones. Do not add an axis when a rule or heuristic is clearer.
+8. Use `axes[].snippets` only as concrete reference overrides for that axis, such as canonical elevation or radius implementations for different scopes. Each `note` must state important scope or exceptions.
 9. Preserve supplied canonical snippets. Do not infer implementation code from screenshots or invent snippets, components, token scales, or a parallel color/typography system unless the owner explicitly requests that code.
 10. Use rules for broad preferences, antiRules for likely drift, and heuristics for choices between multiple valid solutions.
 11. Make every sentence useful without access to the screenshots. Avoid empty adjectives such as “modern”, “clean”, or “premium” without observable meaning.

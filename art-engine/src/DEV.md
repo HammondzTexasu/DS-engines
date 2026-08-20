@@ -16,12 +16,12 @@ Neprovádí žádná volání modelu a nemá runtime závislost.
 
 | Export | Účel |
 | :--- | :--- |
-| `createDefaultState()` | Editovatelný startovní profil s výchozími dimenzemi |
+| `createDefaultState()` | Editovatelný startovní profil s výchozími osami |
 | `importEngineConfig(value)` | Parsovat a normalizovat JSON/string vstup |
 | `exportEngineConfig(state)` | Vrátit kanonický serializovatelný config |
 | `generatePrompt(state)` | Vyrobit jediný Art Engine prompt |
 | `generateSystem(state)` | Vrátit `{ config, prompt }` |
-| `normalizeAxes(value)` | Validovat volné dimenze a deduplikovat názvy |
+| `normalizeAxes(value)` | Validovat volné osy a deduplikovat názvy |
 | `normalizeAxisSnippet(value)` | Validovat jeden reference override |
 | `normalizeAxisSnippets(value, legacy?)` | Validovat override osy a migrovat legacy `snippet` |
 | `assignUniqueAxisName(name, usedKeys)` | Připojit `-2`, `-3`, … když sanitizovaný název koliduje |
@@ -51,7 +51,7 @@ Osy jsou volné a mohou být prázdné. Import zachová jejich pořadí, clampuj
 
 1. Stejný kanonický config vyrobí stejný prompt.
 2. Export používá u každé osy jen `name`; samostatné pole axis ID neexistuje.
-3. Výchozí dimenze žijí v `config/art-config.json` a `createDefaultState()`; normalizace nikdy neobnoví smazané osy.
+3. Výchozí osy žijí v `config/art-config.json` a `createDefaultState()`; normalizace nikdy neobnoví smazané osy.
 4. Chybějící volitelné `confidence` a prázdné `snippets` se z exportovaného JSON vynechají.
 5. Axis snippety jsou scoped reference override, ne globální definice komponenty ani tokenů.
 6. Výstup promptu vždy obsahuje prioritu produktu/usability/accessibility a integrační boundaries.

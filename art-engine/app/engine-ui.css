@@ -95,7 +95,7 @@ fieldset {
   margin-bottom: 0;
 }
 
-.dimension-fieldset {
+.axis-fieldset {
   display: grid;
   gap: 10px;
 }

@@ -75,7 +75,7 @@ export function sanitizeId(value) {
       .toLowerCase()
       .replace(/[^a-z0-9-]+/g, '-')
       .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') || 'dimension'
+      .replace(/^-|-$/g, '') || 'profile'
   );
 }
 
@@ -117,13 +117,13 @@ export function normalizeAxisSnippets(value, legacySnippet) {
 
 /** @param {unknown} value */
 function readAxisName(value, index) {
-  if (!value || typeof value !== 'object') return `Dimension ${index + 1}`;
+  if (!value || typeof value !== 'object') return `Axis ${index + 1}`;
   const source = /** @type {Record<string, unknown>} */ (value);
   return (
     cleanLine(source.name) ||
     cleanLine(source.label) ||
     cleanLine(source.id) ||
-    `Dimension ${index + 1}`
+    `Axis ${index + 1}`
   );
 }
 
@@ -132,7 +132,7 @@ function readAxisName(value, index) {
  * @param {Set<string>} usedKeys
  */
 export function assignUniqueAxisName(value, usedKeys) {
-  const root = cleanLine(value) || 'dimension';
+  const root = cleanLine(value) || 'axis';
   let name = root;
   let key = sanitizeId(name);
   let suffix = 2;
@@ -276,7 +276,7 @@ export function generatePrompt(state) {
   ];
 
   if (config.axes.length) {
-    lines.push('', '## Style dimensions', '');
+    lines.push('', '## Style axes', '');
     for (const axis of config.axes) {
       lines.push(`- ${describeAxis(axis)}`);
       for (const snippet of axis.snippets ?? []) {

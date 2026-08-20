@@ -99,9 +99,9 @@ const { config, prompt } = generateSystem(state);
 
 - [ ] Config je validní JSON a projde importem.
 - [ ] Každá osa má `name`, hodnotu 0–100 a oba konkrétní póly.
-- [ ] Každý `axes[].snippets[]` má neprázdný kód, patří k dané dimenzi a není vydáván za globální tokenový systém.
+- [ ] Každý `axes[].snippets[]` má neprázdný kód, patří k dané ose a není vydáván za globální tokenový systém.
 - [ ] Pravidla jsou pozorovatelná, akční a neodporují si.
-- [ ] Prompt obsahuje všechny aktivní dimenze a pravidla.
+- [ ] Prompt obsahuje všechny aktivní osy a pravidla.
 - [ ] Prompt nevytváří paralelní color/typo/token systém.
 - [ ] Config i prompt na disku odpovídají poslední změně.
 
@@ -150,7 +150,7 @@ Agent upravuje config, spustí sdílený engine, přepíše prompt a při UI pr�
 | :--- | :--- |
 | Kontinuální charakter („méně hravé“) | relevantní `axes[].value` |
 | Nový pojmenovaný kontinuální rozměr | přidej/edituj `axes[]` |
-| Konkrétní canonical implementace dimenze | `axes[].snippets[]` jako scoped reference override |
+| Konkrétní canonical implementace osy | `axes[].snippets[]` jako scoped reference override |
 | Obecný princip | `rules[]` |
 | Konkrétní nežádoucí drift | `antiRules[]` |
 | Preference mezi dvěma validními cestami | `heuristics[]` |
@@ -179,7 +179,7 @@ Nepřepisuj normalizaci nebo prompt ručně v agentním workflow.
 1. **Config = intent, prompt = výstup.**
 2. Po změně configu vždy regenerate.
 3. Stejný canonical config = stejný prompt.
-4. Osy jsou volné a editovatelné; výchozí dimenze v configu nejsou povinný registr.
+4. Osy jsou volné a editovatelné; výchozí osy v configu nejsou povinný registr.
 5. Každá osa musí mít explicitní význam obou pólů.
 6. Volitelné snippety patří pouze ke své ose; `note` omezuje scope a kód není univerzální komponenta.
 7. Číslo osy není token ani pokyn použít jeden motiv všude.
@@ -196,7 +196,7 @@ Nepřepisuj normalizaci nebo prompt ručně v agentním workflow.
 - Chybějící póly dostanou obecný fallback; při kalibraci je vždy nahraď konkrétním významem.
 - Snippet bez kódu se při normalizaci odstraní; nevymýšlej snippet jen ze screenshotu bez explicitního požadavku.
 - Na jedné ose je max 8 override snippetů (`MAX_AXIS_SNIPPETS`).
-- Silně překrývající se osy rozmělňují prompt; raději méně nezávislých dimenzí.
+- Silně překrývající se osy rozmělňují prompt; raději méně nezávislých os.
 - Screenshot ukazuje realizaci, text může vyjadřovat záměr změny; nezaměňuj je.
 - Playground nepersistuje změny automaticky na disk — explicitně stáhni config. Refresh stránky znovu načte `art-config.json`.
 
@@ -207,7 +207,7 @@ Nepřepisuj normalizaci nebo prompt ručně v agentním workflow.
 | Špatně | Správně |
 | :--- | :--- |
 | Z jednoho card layoutu vytvořit globální pravidlo | Hledej opakovaný důkaz nebo použij konkrétní anti-rule |
-| Vymyslet 12 synonymních os | Nech 3–7 nezávislých dimenzí |
+| Vymyslet 12 synonymních os | Nech 3–7 nezávislých os |
 | Ručně upravit generovaný prompt | Změň config → generate |
 | Vytvořit review/generation varianty | Použij jeden prompt s kontextem aktuálního úkolu |
 | Přenést hexy/font sizes do art configu | Použij Color/Typo Engine |
@@ -227,7 +227,7 @@ Playground servíruj přes HTTP tak, aby mohl načíst `../config/art-config.jso
 1. Shrň rozpoznaný intent (Calibrate/Tune/Generate/Apply).
 2. Při změně uveď, které config vrstvy se změnily.
 3. Proveď normalizaci + generate + zápis.
-4. Stručně potvrď výsledný profil/dimenze a cestu promptu.
+4. Stručně potvrď výsledný profil/osy a cestu promptu.
 5. Nezahlcuj uživatele interními variantami promptů.
 
 ---

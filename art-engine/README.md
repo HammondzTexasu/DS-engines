@@ -24,12 +24,12 @@ návrh / implementace / kontrola UI
 ## Config
 
 - `styleProfile`: krátký název a shrnutí charakteru.
-- `axes`: libovolné stylové dimenze 0–100; každá má vlastní název, význam obou pólů a volitelné `snippets` jako reference override.
+- `axes`: libovolné stylové osy 0–100; každá má vlastní název, význam obou pólů a volitelné `snippets` jako reference override.
 - `rules`: co má AI preferovat.
 - `antiRules`: kam návrh nesmí sklouznout.
 - `heuristics`: jak rozhodovat mezi více validními řešeními.
 
-Osy nejsou povinný fixní slovník. Playground umožňuje osy přidávat, přejmenovat a mazat. Výchozí osy v `art-config.json` jsou pouze editovatelný start. Snippety patří ke konkrétní dimenzi (např. elevation nebo radius), nefungují jako globální komponenta ani nový tokenový systém.
+Osy nejsou povinný fixní slovník. Playground umožňuje osy přidávat, přejmenovat a mazat. Výchozí osy v `art-config.json` jsou pouze editovatelný start. Snippety patří ke konkrétní ose (např. elevation nebo radius), nefungují jako globální komponenta ani nový tokenový systém.
 
 ## Headless API
 
@@ -44,7 +44,7 @@ Po změně intentu persistuj normalizovaný `config` a regeneruj `prompt`.
 
 ## Playground
 
-- jeden vycentrovaný sloupec: profil, samostatné stylové dimenze s volitelným reference override a pravidla,
+- jeden vycentrovaný sloupec: profil, samostatné stylové osy s volitelným reference override a pravidla,
 - dole collapsed **Engine config** a **Art direction prompt** (náhled, Import/Download/Copy podle panelu).
 
 Playground ukládá pouze do paměti prohlížeče. Download je explicitní export na disk. Refresh stránky znovu načte `config/art-config.json`.

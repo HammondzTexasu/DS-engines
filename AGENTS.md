@@ -20,7 +20,7 @@ Tři headless enginy pro design systém. Každý má:
 | Typografie + ikony | **Typo Engine** | [`typo-engine/AGENTS.md`](typo-engine/AGENTS.md) | CSS tokeny (`--typo-*`) + font/icon URL |
 | Art direction (vizuální záměr UI) | **Art Engine** | [`art-engine/AGENTS.md`](art-engine/AGENTS.md) | jeden art-direction prompt |
 
-**Rozdělení:** Color = čísla barev. Typo = metriky textu a ikon. Art = estetický záměr (dimenze, pravidla) — **negeneruje** color/typo tokeny.
+**Rozdělení:** Color = čísla barev. Typo = metriky textu a ikon. Art = estetický záměr (osy, pravidla) — **negeneruje** color/typo tokeny.
 
 Playground v tomto repu: [`index.html`](index.html) → Color / Typo / Art Engine.
 

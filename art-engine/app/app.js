@@ -352,16 +352,16 @@ function createSliderControl(label, value, commit) {
  * @param {import('../src/art-engine.js').ArtAxis} axis
  * @param {number} index
  */
-function createDimensionFieldset(axis, index) {
+function createAxisFieldset(axis, index) {
   const fs = document.createElement('fieldset');
-  fs.className = 'dimension-fieldset';
+  fs.className = 'axis-fieldset';
 
   const nameInput = document.createElement('input');
   nameInput.type = 'text';
   nameInput.className = 'ui-ghost palette-name-input';
   nameInput.value = axis.name;
   nameInput.spellcheck = false;
-  nameInput.setAttribute('aria-label', 'Dimension name');
+  nameInput.setAttribute('aria-label', 'Axis name');
 
   const slider = createSliderControl('value', axis.value, (value) => {
     const current = state.axes[index];
@@ -590,7 +590,7 @@ function createAxisSnippetControl(axis, index) {
   return panel;
 }
 
-function createAddDimensionWrap() {
+function createAddAxisWrap() {
   const wrap = document.createElement('div');
   wrap.className = 'palette-fieldset-wrap palette-add-wrap';
 
@@ -605,11 +605,11 @@ function createAddDimensionWrap() {
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'ui-btn add-palette-btn palette-header-action';
-  addBtn.textContent = '+ Add dimension';
+  addBtn.textContent = '+ Add axis';
   addBtn.addEventListener('click', () => {
     const usedKeys = new Set(state.axes.map((axis) => sanitizeId(axis.name)));
     state.axes.push({
-      name: assignUniqueAxisName('New dimension', usedKeys),
+      name: assignUniqueAxisName('New axis', usedKeys),
       value: 50,
       meaningLow: 'low expression',
       meaningHigh: 'high expression',
@@ -814,10 +814,10 @@ function render() {
   app.appendChild(wrapSection('Profile', profileControls()));
 
   for (const [index, axis] of state.axes.entries()) {
-    app.appendChild(createDimensionFieldset(axis, index));
+    app.appendChild(createAxisFieldset(axis, index));
   }
 
-  app.appendChild(createAddDimensionWrap());
+  app.appendChild(createAddAxisWrap());
   app.appendChild(wrapSection('Rules', rulesControls()));
   app.appendChild(createCollapsePanel('Engine config', 'config', configControls(), configExpanded));
   app.appendChild(
